@@ -78,10 +78,37 @@ This document defines:
 - Validation rules and extensibility guidelines
 
 **Key architectural decisions:**
-- RGBA colors use normalized values (0.0-1.0) for SwiftUI compatibility
-- Transform system includes position, rotation, and scale for all annotations
-- Groups support arbitrary nesting with hierarchical transforms
-- Image annotations support both base64 embedding and file references
+- **RGBA colors** use normalized values (0.0-1.0) for both UI and JSON serialization
+  - UI: SwiftUI `Color` type for editing
+  - Storage: `CodableColor` struct with RGBA components (0.0-1.0)
+  - Conversion handled automatically via `CodableColor` wrapper
+- **Transform system** includes position, rotation, and scale for all annotations
+- **Groups** support arbitrary nesting with hierarchical transforms
+- **Image annotations** support both base64 embedding and file references
+- **Font system** uses `FontChoice` enum with fallback to system font
+- **Input validation** automatically clamps numeric values to safe ranges
+
+## Implementation Status
+
+**Current Phase:** Phase 1 Complete (Documentation and UI Foundation)
+
+**Completed:**
+- ✅ Complete documentation (requirements, architecture, plan)
+- ✅ UI foundation with all 10 annotation tools
+- ✅ Properties panels with tool-specific settings
+- ✅ Color picker and settings sheets
+- ✅ `CodableColor` wrapper for JSON serialization
+- ✅ `FontChoice` enum with safe font loading
+- ✅ Input validation with automatic clamping
+- ✅ Tool switching with color synchronization
+- ✅ Constants-based UI dimensions (no magic numbers)
+
+**Next Steps (Phase 2 - Build Frontend):**
+- Implement `AnnotationCanvas` class
+- Real annotation rendering
+- Mouse event handling and tool interaction
+- Canvas zoom/pan functionality
+- See `/docs/plan/master-plan.md` for complete roadmap
 
 ## Build Configuration
 
@@ -91,3 +118,4 @@ This document defines:
 - Deployment Target: macOS 26.1
 - Sandbox: Enabled (will need user-selected-files entitlement for image loading)
 - Hardened Runtime: Enabled
+- Build Status: ✅ Clean (0 errors, 0 warnings)

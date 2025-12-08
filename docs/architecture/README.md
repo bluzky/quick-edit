@@ -24,7 +24,7 @@ Defines all 10 annotation types with full JSON schema:
 ---
 
 #### [tool-system.md](./tool-system.md)
-**Tool architecture and implementation guide**
+**Tool architecture and implementation guide (Protocol-Based Reference)**
 
 Complete tool system with SwiftUI implementation:
 - `AnnotationTool` protocol design
@@ -33,7 +33,8 @@ Complete tool system with SwiftUI implementation:
 - Example implementations (Select, Line, Shape, Text)
 - Custom tool creation guide
 
-**Status:** ✅ Complete (Fixed from draft)
+**Status:** ✅ Complete (Reference Design)
+**Note:** Current implementation uses enum-based tools for MVP simplicity. See ADR-001 in architecture-decisions.md
 
 **Key Features:**
 - Proper `@Observable` state management
@@ -41,6 +42,56 @@ Complete tool system with SwiftUI implementation:
 - Performance optimizations (60 FPS throttling)
 - Keyboard shortcuts integration
 - Validation and error handling
+
+---
+
+#### [canvas-architecture.md](./canvas-architecture.md)
+**Canvas rendering and interaction system**
+
+Complete canvas architecture:
+- Coordinate systems (image space vs canvas space)
+- Rendering pipeline with z-index layering
+- Hit testing algorithms for all annotation types
+- Resize handle detection
+- Alignment guides and grid snapping
+- Zoom/pan implementation
+- Command pattern for undo/redo
+- Performance optimization strategies
+
+**Status:** ✅ Complete
+
+---
+
+#### [canvas-api-design.md](./canvas-api-design.md)
+**Canvas-Centric Architecture - API Design**
+
+**⭐ CRITICAL DESIGN DOCUMENT** for Phase 2+
+
+Complete separation between canvas and UI:
+- **Public APIs:** Tool management, selection, properties, arrangement, history
+- **Event System:** Observable properties and Combine publishers
+- **Tool Integration:** How tools communicate with canvas
+- **UI Examples:** Toolbar, properties panel, inspector, menus
+- **Extension Points:** Custom tools, event handlers, third-party integration
+- **Migration Path:** From Phase 1 tight coupling to Phase 2+ decoupling
+
+**Key Principle:** Canvas owns state. UI calls APIs and subscribes to events.
+
+**Status:** ✅ Complete
+
+---
+
+#### [architecture-decisions.md](./architecture-decisions.md)
+**Architecture Decision Records (ADRs)**
+
+Documents key architectural decisions:
+- **ADR-001:** Tool Architecture (Enum vs Protocol) - Chose enum for MVP
+- **ADR-002:** Color Representation (RGBA 0-1) - CodableColor wrapper
+- **ADR-003:** Font Representation - FontChoice enum with fallback
+- **ADR-004:** Input Validation - Automatic clamping with didSet
+- **ADR-005:** Canvas-Centric Architecture - Separation of UI and logic ⭐ **CRITICAL**
+
+**Status:** ✅ Complete
 
 ---
 
@@ -59,15 +110,27 @@ Documents critical issues found and fixes applied:
 
 ## Architecture Decisions
 
+### Canvas-Centric Architecture ⭐ **MOST IMPORTANT**
+- **Canvas as Single Source of Truth:** All state lives in `AnnotationCanvas`
+- **UI as Thin Layer:** Components call canvas APIs and subscribe to events
+- **Clear Separation:** UI never directly modifies canvas state
+- **Event System:** Observable properties + Combine publishers for updates
+- **See:** ADR-005 in architecture-decisions.md and canvas-api-design.md
+
 ### Color Format
 - **UI:** SwiftUI `Color` for editing
 - **Storage:** RGBA (0.0-1.0 normalized) in JSON
 - **Conversion:** `CodableColor` wrapper for Codable conformance
 
 ### State Management
-- **Tools:** `@Observable` classes (Swift 5.9+)
-- **Canvas:** `@Observable` for annotations array
-- **Bindings:** Direct `$property` syntax
+- **Phase 1 (Current):** `EditorViewModel` with `@Observable`
+- **Phase 2+ (Target):** `AnnotationCanvas` with public APIs
+- **Migration:** Gradual transition from direct access to API calls
+
+### Tool Architecture
+- **Phase 1-2:** Enum-based tools for MVP simplicity
+- **Phase 3+:** Optional protocol-based for extensibility
+- **Integration:** Tools use canvas APIs, never direct mutation
 
 ### Coordinate System
 - **Origin:** Top-left (0, 0)
@@ -76,23 +139,25 @@ Documents critical issues found and fixes applied:
 
 ### Undo/Redo
 - **Pattern:** Command pattern
-- **Implementation:** Canvas manages undo/redo stacks
-- **Scope:** All annotation operations (add, delete, modify)
+- **Implementation:** Canvas intercepts all mutations, wraps in commands
+- **Scope:** All annotation operations (add, delete, modify, arrange)
 
 ### Extensibility
-- **Tools:** Register via `ToolManager.register()`
-- **Annotations:** Protocol-based, support custom types
-- **Groups:** Arbitrary nesting supported
+- **Tools:** Register via `ToolManager.register()` or canvas API
+- **UI Components:** Build custom toolbars/panels using canvas APIs
+- **Events:** Subscribe to canvas events for custom behavior
+- **Plugins:** Third-party extensions via public API surface
 
 ---
 
 ## Implementation Phases
 
-### Phase 1: Preparation (Week 1) - Current
+### Phase 1: Preparation (Week 1) - ✅ COMPLETE
 - ✅ Annotation types specification
 - ✅ Tool system architecture
-- ⏳ Canvas architecture (pending)
-- ⏳ UI wireframes (pending)
+- ✅ Canvas architecture
+- ✅ UI implementation (with mock canvas)
+- ✅ Architecture decision records
 
 ### Phase 2: Frontend (Week 2-3)
 - Implement AnnotationCanvas
@@ -205,25 +270,30 @@ protocol AnnotationTool: AnyObject {
 
 ---
 
-## Next Steps
+## Next Steps (Phase 2)
 
-1. **Create canvas-architecture.md**
-   - Define AnnotationCanvas responsibilities
-   - Hit testing algorithm
-   - Rendering pipeline
-   - Coordinate space conversions
+1. **Implement AnnotationCanvas class**
+   - Follow canvas-architecture.md specification
+   - Basic annotation array management
+   - Z-index sorting for rendering
+   - Selection state tracking
 
-2. **Create ui-architecture.md**
-   - Main window layout
-   - Toolbar design
-   - Properties panel
-   - Canvas view integration
+2. **Implement rendering pipeline**
+   - SwiftUI Canvas integration
+   - Annotation rendering by type
+   - Selection handles display
+   - Grid and guides overlay
 
-3. **Create export-system.md**
+3. **Add mouse interaction**
+   - Tool event handling (onMouseDown/Drag/Up)
+   - Hit testing implementation
+   - Resize handle detection
+   - Drag to move/resize annotations
+
+4. **Create export-system.md** (if time permits in Phase 2)
    - Image export pipeline
    - JSON serialization details
    - File format specifications
-   - Batch export support
 
 ---
 
@@ -242,6 +312,7 @@ protocol AnnotationTool: AnyObject {
 
 ---
 
-**Status:** Architecture design in progress
-**Completion:** 40% (2 of 5 core documents complete)
-**Next Document:** canvas-architecture.md
+**Status:** Phase 1 Architecture Complete ✅
+**Completion:** 100% (All Phase 1 documents complete)
+**Next Phase:** Phase 2 - Frontend Implementation
+**Last Updated:** December 8, 2025
