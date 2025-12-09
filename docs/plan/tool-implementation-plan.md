@@ -35,18 +35,18 @@ Systematic plan to implement all 10 annotation tools for QuickEdit. Each tool fo
 **SelectTool:**
 - ✅ Selection (click to select/deselect)
 - ✅ Canvas panning (drag empty space)
-- ❌ Move annotations (drag selected) - **TODO**
+- ✅ Move annotations (drag selected) with undo
 - ❌ Multi-selection (shift+click) - **TODO**
 - ❌ Box selection (drag rectangle) - **TODO**
 
 **ShapeTool (multi-shape):**
-- ✅ Drag-to-create flow (rectangle baseline)
-- ✅ Command-based creation via `addAnnotation`
-- ✅ Live preview while dragging
-- ❌ Multi-shape support (ellipse/diamond/triangle/rounded) - **TODO**
-- ❌ Unified `ShapeAnnotation` + rendering + hit testing - **TODO**
-- ❌ Properties panel integration (fill/stroke/width/radius) - **TODO**
-- ❌ Sub-toolbar (shape picker + properties) - **TODO**
+- ✅ ShapeTool replaces RectangleTool; command-based creation
+- ✅ Multi-shape kinds (rectangle, rounded, ellipse, diamond, triangle)
+- ✅ Unified `ShapeAnnotation`, rendering, and hit testing (fill+stroke path)
+- ✅ Properties panel integration (fill/stroke/width/radius) with default radius 10
+- ✅ Sub-toolbar behavior via tool metadata (momentary → auto-return to Select)
+- ✅ Shift+drag constrains to square/circle
+- ❌ Rotation-aware hit testing bounding box (axis-aligned selection bounds remain) - **TODO**
 
 ---
 
@@ -1574,5 +1574,5 @@ After all tools implemented, perform comprehensive integration testing:
 - Properties panels can be added incrementally
 - JSON serialization will be batch-implemented after all tools complete
 
-**Current Status:** 0/10 tools fully complete (Select and Shape are in progress)
-**Next Up:** Tool 0A → Select Tool → Phase 1 (Move Annotations)
+**Current Status:** 0/10 tools fully complete (Select and Shape largely functional; multi-select/box-select pending)
+**Next Up:** Tool 0A → Select Tool → multi-selection/box selection polish
