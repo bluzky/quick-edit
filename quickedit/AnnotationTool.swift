@@ -8,6 +8,7 @@
 
 import SwiftUI
 import Combine
+import AppKit
 
 // MARK: - Tool Protocol
 
@@ -187,29 +188,44 @@ final class SelectTool: AnnotationTool {
     }
 }
 
-// MARK: - Rectangle Tool
+// MARK: - Shape Tool
 
-/// Tool for drawing rectangle annotations
-final class RectangleTool: AnnotationTool {
-    let id = "rectangle"
-    let name = "Rectangle"
-    let iconName = "rectangle"
+/// Tool for drawing multi-shape annotations
+final class ShapeTool: AnnotationTool {
+    let id = "shape"
+    let name = "Shape"
+    let iconName = "square.on.circle"
 
     private var startPoint: CGPoint?
     private var currentPoint: CGPoint?
     private var fillColor: Color = .blue.opacity(0.3)
     private var strokeColor: Color = .blue
+    private var strokeWidth: CGFloat = 1.5
+    private var cornerRadius: CGFloat = 10
+    private var shapeKind: ShapeKind = .rectangle
+
+    func updateStyle(
+        fill: Color,
+        stroke: Color,
+        strokeWidth: CGFloat,
+        cornerRadius: CGFloat,
+        shapeKind: ShapeKind
+    ) {
+        self.fillColor = fill
+        self.strokeColor = stroke
+        self.strokeWidth = strokeWidth
+        self.cornerRadius = cornerRadius
+        self.shapeKind = shapeKind
+    }
 
     func onMouseDown(at point: CGPoint, on canvas: AnnotationCanvas) {
-        // Convert to image space for annotation coordinates
         let imagePoint = canvas.canvasToImage(point)
         startPoint = imagePoint
         currentPoint = imagePoint
-        canvas.onInteractionBegan.send("drawing_rectangle")
+        canvas.onInteractionBegan.send("drawing_shape")
     }
 
     func onMouseDrag(to point: CGPoint, on canvas: AnnotationCanvas) {
-        // Update current point for preview
         let imagePoint = canvas.canvasToImage(point)
         currentPoint = imagePoint
     }
@@ -218,14 +234,20 @@ final class RectangleTool: AnnotationTool {
         guard let start = startPoint else { return }
         let imagePoint = canvas.canvasToImage(point)
 
-        // Calculate normalized rectangle (top-left origin, positive width/height)
-        let minX = min(start.x, imagePoint.x)
-        let minY = min(start.y, imagePoint.y)
-        let width = abs(imagePoint.x - start.x)
-        let height = abs(imagePoint.y - start.y)
+        let constrained = isShiftPressed()
+        let normalized = normalizedRect(start: start, end: imagePoint, constrainSquare: constrained)
+        let minX = normalized.origin.x
+        let minY = normalized.origin.y
+        let width = normalized.size.width
+        let height = normalized.size.height
 
-        // Create rectangle annotation
-        let rect = RectangleAnnotation(
+        // Ignore tiny shapes
+        guard width > 0.5, height > 0.5 else {
+            resetState(on: canvas)
+            return
+        }
+
+        let shape = ShapeAnnotation(
             zIndex: (canvas.annotations.map(\.zIndex).max() ?? 0) + 1,
             transform: AnnotationTransform(
                 position: CGPoint(x: minX, y: minY),
@@ -234,43 +256,67 @@ final class RectangleTool: AnnotationTool {
             ),
             size: CGSize(width: width, height: height),
             fill: fillColor,
-            stroke: strokeColor
+            stroke: strokeColor,
+            strokeWidth: strokeWidth,
+            shapeKind: shapeKind,
+            cornerRadius: shapeKind.supportsCornerRadius ? cornerRadius : 0
         )
 
-        // Add annotation via command pattern for undo support
-        canvas.addAnnotation(rect)
-
-        // Clear state
-        startPoint = nil
-        currentPoint = nil
-        canvas.onInteractionEnded.send("drawing_rectangle")
+        canvas.addAnnotation(shape)
+        resetState(on: canvas)
     }
 
     func renderPreview(in context: inout GraphicsContext, canvas: AnnotationCanvas) {
         guard let start = startPoint, let end = currentPoint else { return }
 
-        // Convert image space coordinates to canvas space for rendering
         let canvasStart = canvas.imageToCanvas(start)
         let canvasEnd = canvas.imageToCanvas(end)
 
-        // Create rectangle with normalized coordinates
-        let rect = CGRect(
-            x: min(canvasStart.x, canvasEnd.x),
-            y: min(canvasStart.y, canvasEnd.y),
-            width: abs(canvasEnd.x - canvasStart.x),
-            height: abs(canvasEnd.y - canvasStart.y)
-        )
+        let constrained = isShiftPressed()
+        let normalized = normalizedRect(start: canvasStart, end: canvasEnd, constrainSquare: constrained)
+        let rect = CGRect(origin: normalized.origin, size: normalized.size)
 
-        // Draw preview
-        let path = Path(rect)
+        let path = makeShapePath(
+            kind: shapeKind,
+            size: rect.size,
+            cornerRadius: shapeKind.supportsCornerRadius ? cornerRadius : 0
+        ).applying(CGAffineTransform(translationX: rect.origin.x, y: rect.origin.y))
+
         context.fill(path, with: .color(fillColor))
-        context.stroke(path, with: .color(strokeColor), lineWidth: 1.5)
+        context.stroke(path, with: .color(strokeColor), lineWidth: strokeWidth)
     }
 
     func deactivate() {
-        // Clean up state when switching tools
         startPoint = nil
         currentPoint = nil
+    }
+
+    private func resetState(on canvas: AnnotationCanvas) {
+        startPoint = nil
+        currentPoint = nil
+        canvas.onInteractionEnded.send("drawing_shape")
+    }
+
+    private func normalizedRect(start: CGPoint, end: CGPoint, constrainSquare: Bool) -> CGRect {
+        var width = end.x - start.x
+        var height = end.y - start.y
+
+        if constrainSquare {
+            let maxSide = max(abs(width), abs(height))
+            width = width >= 0 ? maxSide : -maxSide
+            height = height >= 0 ? maxSide : -maxSide
+        }
+
+        let origin = CGPoint(
+            x: width >= 0 ? start.x : start.x + width,
+            y: height >= 0 ? start.y : start.y + height
+        )
+
+        return CGRect(origin: origin, size: CGSize(width: abs(width), height: abs(height)))
+    }
+
+    private func isShiftPressed() -> Bool {
+        NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false
     }
 }
 
@@ -285,7 +331,7 @@ final class ToolRegistry {
     private init() {
         // Register built-in tools
         register(SelectTool())
-        register(RectangleTool())
+        register(ShapeTool())
     }
 
     /// Register a tool with the registry

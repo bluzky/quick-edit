@@ -10,6 +10,50 @@ import SwiftUI
 import Combine
 import AppKit
 
+enum ShapeKind: String, CaseIterable {
+    case rectangle = "Rectangle"
+    case rounded = "Rounded"
+    case ellipse = "Ellipse"
+    case diamond = "Diamond"
+    case triangle = "Triangle"
+
+    var supportsCornerRadius: Bool {
+        self == .rectangle || self == .rounded
+    }
+}
+
+func makeShapePath(kind: ShapeKind, size: CGSize, cornerRadius: CGFloat) -> Path {
+    let width = max(size.width, 0)
+    let height = max(size.height, 0)
+
+    switch kind {
+    case .rectangle:
+        return Path(CGRect(origin: .zero, size: CGSize(width: width, height: height)))
+    case .rounded:
+        let radius = min(min(width, height) / 2, cornerRadius)
+        return Path(roundedRect: CGRect(origin: .zero, size: CGSize(width: width, height: height)), cornerSize: CGSize(width: radius, height: radius))
+    case .ellipse:
+        return Path(ellipseIn: CGRect(origin: .zero, size: CGSize(width: width, height: height)))
+    case .diamond:
+        let path = Path { p in
+            p.move(to: CGPoint(x: width / 2, y: 0))
+            p.addLine(to: CGPoint(x: width, y: height / 2))
+            p.addLine(to: CGPoint(x: width / 2, y: height))
+            p.addLine(to: CGPoint(x: 0, y: height / 2))
+            p.closeSubpath()
+        }
+        return path
+    case .triangle:
+        let path = Path { p in
+            p.move(to: CGPoint(x: width / 2, y: 0))
+            p.addLine(to: CGPoint(x: width, y: height))
+            p.addLine(to: CGPoint(x: 0, y: height))
+            p.closeSubpath()
+        }
+        return path
+    }
+}
+
 struct AnnotationTransform {
     var position: CGPoint
     var scale: CGSize
@@ -33,7 +77,7 @@ protocol Annotation: AnyObject, Identifiable {
     func contains(point: CGPoint) -> Bool  // Point is in image space
 }
 
-final class RectangleAnnotation: Annotation {
+final class ShapeAnnotation: Annotation {
     let id: UUID = UUID()
     var zIndex: Int
     var visible: Bool = true
@@ -42,35 +86,67 @@ final class RectangleAnnotation: Annotation {
     var size: CGSize
     var fill: Color
     var stroke: Color
+    var strokeWidth: CGFloat
+    var shapeKind: ShapeKind
+    var cornerRadius: CGFloat
 
     init(
         zIndex: Int,
         transform: AnnotationTransform,
         size: CGSize,
         fill: Color,
-        stroke: Color
+        stroke: Color,
+        strokeWidth: CGFloat,
+        shapeKind: ShapeKind,
+        cornerRadius: CGFloat
     ) {
         self.zIndex = zIndex
         self.transform = transform
         self.size = size
         self.fill = fill
         self.stroke = stroke
+        self.strokeWidth = strokeWidth
+        self.shapeKind = shapeKind
+        self.cornerRadius = cornerRadius
     }
 
     func contains(point: CGPoint) -> Bool {
-        // Apply inverse transform to test point in local space
-        let scaledSize = CGSize(
-            width: size.width * abs(transform.scale.width),
-            height: size.height * abs(transform.scale.height)
+        // Convert to local space: translate, unscale (including flips), then unrotate
+        var local = CGPoint(
+            x: point.x - transform.position.x,
+            y: point.y - transform.position.y
         )
 
-        // For now, ignore rotation in hit testing (TODO: implement rotated hit testing)
-        let rect = CGRect(origin: transform.position, size: scaledSize)
-        return rect.contains(point)
+        // Guard against zero scale to avoid division by zero
+        guard transform.scale.width != 0, transform.scale.height != 0 else {
+            return false
+        }
+
+        local.x /= transform.scale.width
+        local.y /= transform.scale.height
+
+        // Unrotate around the shape center
+        if transform.rotation != .zero {
+            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+            let translated = CGPoint(x: local.x - center.x, y: local.y - center.y)
+            let angle = -transform.rotation.radians
+            let rotated = CGPoint(
+                x: translated.x * cos(angle) - translated.y * sin(angle),
+                y: translated.x * sin(angle) + translated.y * cos(angle)
+            )
+            local = CGPoint(x: rotated.x + center.x, y: rotated.y + center.y)
+        }
+
+        // Hit test against filled path plus stroke
+        let basePath = makeShapePath(kind: shapeKind, size: size, cornerRadius: cornerRadius)
+        var hitPath = basePath
+        if strokeWidth > 0 {
+            hitPath.addPath(basePath.strokedPath(.init(lineWidth: strokeWidth)))
+        }
+        return hitPath.contains(local)
     }
 
     var bounds: CGRect {
-        // Calculate bounds accounting for scale (rotation would expand bounds further)
         let scaledSize = CGSize(
             width: size.width * abs(transform.scale.width),
             height: size.height * abs(transform.scale.height)
@@ -206,6 +282,7 @@ final class AnnotationCanvas: ObservableObject {
             self.activeTool?.deactivate()
             self.activeTool = tool
             tool?.activate()
+            self.clearSelection()
         }
     }
 
@@ -561,28 +638,37 @@ final class AnnotationCanvas: ObservableObject {
     // MARK: - Demo Data
 
     private func seedDemoAnnotations() {
-        let first = RectangleAnnotation(
+        let first = ShapeAnnotation(
             zIndex: 1,
             transform: AnnotationTransform(position: CGPoint(x: 120, y: 90), scale: CGSize(width: 1, height: 1), rotation: .zero),
             size: CGSize(width: 240, height: 160),
             fill: Color.blue.opacity(0.18),
-            stroke: Color.blue.opacity(0.6)
+            stroke: Color.blue.opacity(0.6),
+            strokeWidth: 1.5,
+            shapeKind: .rectangle,
+            cornerRadius: 0
         )
 
-        let second = RectangleAnnotation(
+        let second = ShapeAnnotation(
             zIndex: 2,
             transform: AnnotationTransform(position: CGPoint(x: 260, y: 220), scale: CGSize(width: 1, height: 1), rotation: .zero),
             size: CGSize(width: 180, height: 120),
             fill: Color.green.opacity(0.18),
-            stroke: Color.green.opacity(0.6)
+            stroke: Color.green.opacity(0.6),
+            strokeWidth: 1.5,
+            shapeKind: .ellipse,
+            cornerRadius: 0
         )
 
-        let third = RectangleAnnotation(
+        let third = ShapeAnnotation(
             zIndex: 3,
             transform: AnnotationTransform(position: CGPoint(x: 420, y: 140), scale: CGSize(width: 1, height: 1), rotation: .zero),
             size: CGSize(width: 140, height: 120),
             fill: Color.orange.opacity(0.18),
-            stroke: Color.orange.opacity(0.6)
+            stroke: Color.orange.opacity(0.6),
+            strokeWidth: 1.5,
+            shapeKind: .diamond,
+            cornerRadius: 0
         )
 
         // Direct initialization - don't create undo commands for demo data

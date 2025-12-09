@@ -18,7 +18,7 @@ Systematic plan to implement all 10 annotation tools for QuickEdit. Each tool fo
 | Priority | Tool | Status | Complexity | Estimated Time |
 |----------|------|--------|------------|----------------|
 | 1 | Select Tool | **In Progress** | Medium | 2-3 hours |
-| 2 | Rectangle Tool | **In Progress** | Low | 1-2 hours |
+| 2 | Shape Tool (multi-shape) | **In Progress** | Medium | 2-3 hours |
 | 3 | Line Tool | Planned | Medium | 3-4 hours |
 | 4 | Text Tool | Planned | High | 4-6 hours |
 | 5 | Freehand Tool | Planned | Medium | 3-4 hours |
@@ -39,11 +39,14 @@ Systematic plan to implement all 10 annotation tools for QuickEdit. Each tool fo
 - ❌ Multi-selection (shift+click) - **TODO**
 - ❌ Box selection (drag rectangle) - **TODO**
 
-**RectangleTool:**
-- ✅ Draw rectangles with preview
-- ✅ Create via canvas API (undoable)
-- ❌ Properties panel integration - **TODO**
-- ❌ Sync fill/stroke colors from UI - **TODO**
+**ShapeTool (multi-shape):**
+- ✅ Drag-to-create flow (rectangle baseline)
+- ✅ Command-based creation via `addAnnotation`
+- ✅ Live preview while dragging
+- ❌ Multi-shape support (ellipse/diamond/triangle/rounded) - **TODO**
+- ❌ Unified `ShapeAnnotation` + rendering + hit testing - **TODO**
+- ❌ Properties panel integration (fill/stroke/width/radius) - **TODO**
+- ❌ Sub-toolbar (shape picker + properties) - **TODO**
 
 ---
 
@@ -248,133 +251,102 @@ final class MoveAnnotationsCommand: CanvasCommand {
 
 ---
 
-## Tool 0B: Complete Rectangle Tool
+## Tool 0B: Shape Tool (multi-shape)
 
-### Phase 1: Refine Requirements & Specs (10 min)
+### Phase 1: Refine Requirements & Specs (20 min)
 
-**Missing Features:**
-1. **Properties panel integration** - Use colors from UI settings
-2. **Sync tool colors** - When user changes color in properties panel, tool uses new color
-3. **Color persistence** - Remember last used colors
+**Goals:**
+1. Replace rectangle-only flow with a single ShapeTool that supports multiple shapes (Rect, Rounded Rect, Ellipse, Diamond, Triangle).
+2. Introduce `ShapeAnnotation` with `shapeKind` to unify rendering and hit testing.
+3. Sub-toolbar: left side shape picker, right side properties (fill, stroke, width, radius when applicable).
 
-**Current State:**
-- RectangleTool has hardcoded colors: `.blue.opacity(0.3)` and `.blue`
-- Properties panel exists with ColorPicker but doesn't affect tool
-- EditorViewModel has `shape.fillColor` and `shape.strokeColor`
-
-**Required Changes:**
-- RectangleTool should read colors from EditorViewModel
-- Need a way to pass ViewModel properties to tool
+**Data Model:**
+- `enum ShapeKind { case rectangle(cornerRadius: CGFloat), ellipse, diamond, triangle }`
+- `final class ShapeAnnotation: Annotation { shapeKind, fill, stroke, strokeWidth }`
+- Path helper reused for rendering and hit testing; rotation-aware hit testing can be iterative follow-up.
 
 **Acceptance Criteria:**
-- [ ] Color sync mechanism designed
-- [ ] Tool property injection planned
+- [ ] ShapeKind + ShapeAnnotation spec approved
+- [ ] Sub-toolbar layout agreed (shape picker left, properties right)
+- [ ] Back-compat decision: migrate RectangleAnnotation immediately or keep temporarily
 
 ---
 
-### Phase 2: Implement Behavior (45 min)
+### Phase 2: Implement Behavior (1.5 hours)
 
 **Tasks:**
 
-1. **Add color properties to AnnotationCanvas** (15 min)
-   ```swift
-   // In AnnotationCanvas.swift
-   @Published var toolFillColor: Color = .blue.opacity(0.3)
-   @Published var toolStrokeColor: Color = .blue
-   ```
+1. **Add ShapeAnnotation + ShapeKind** (30 min)
+   - Implement Annotation conformance, fill/stroke/strokeWidth.
+   - Add shape-specific stored params (e.g., cornerRadius for rectangle).
 
-2. **Update RectangleTool to use canvas colors** (15 min)
-   ```swift
-   final class RectangleTool: AnnotationTool {
-       // Remove hardcoded colors
-       // private var fillColor: Color = .blue.opacity(0.3)  // DELETE
-       // private var strokeColor: Color = .blue  // DELETE
+2. **Path & Preview helpers** (20 min)
+   - `path(for: ShapeKind, size:) -> Path` in rendering layer.
+   - Use same helper for previews and hit testing (apply image-space transforms; rotation handling noted as follow-up).
+   - Hit testing uses transformed path (translate → unscale → unrotate) and combines fill + stroke to match the visible outline.
 
-       func onMouseUp(at point: CGPoint, on canvas: AnnotationCanvas) {
-           // ...
-           let rect = RectangleAnnotation(
-               // ... other properties
-               fill: canvas.toolFillColor,    // Use from canvas
-               stroke: canvas.toolStrokeColor // Use from canvas
-           )
-           canvas.addAnnotation(rect)
-       }
+3. **ShapeTool implementation** (40 min)
+   - State: `startPoint`, `currentPoint`, `shapeKind`, `fillColor`, `strokeColor`, `strokeWidth`, `cornerRadius`.
+   - Drag flow mirrors RectangleTool: convert canvas→image, normalize rect, create ShapeAnnotation, add via `canvas.addAnnotation`.
+   - Preview uses `path(for:)` with current shape kind.
 
-       func renderPreview(in context: inout GraphicsContext, canvas: AnnotationCanvas) {
-           // ... existing code
-           // Use canvas.toolFillColor and canvas.toolStrokeColor
-       }
-   }
-   ```
-
-3. **Sync EditorViewModel colors to canvas** (15 min)
-   ```swift
-   // In EditorViewModel
-   var shape: ShapeProperties = ShapeProperties() {
-       didSet {
-           canvas.toolFillColor = shape.fillColor
-           canvas.toolStrokeColor = shape.strokeColor
-       }
-   }
-
-   init() {
-       // ... existing code
-
-       // Initial sync
-       canvas.toolFillColor = shape.fillColor
-       canvas.toolStrokeColor = shape.strokeColor
-   }
-   ```
+4. **Canvas color/width plumbing** (20 min)
+   - Store current shape styling on canvas or view model to keep UI → tool sync (fill, stroke, width, radius where applicable).
 
 **Acceptance Criteria:**
-- [ ] Canvas has color properties
-- [ ] RectangleTool reads from canvas
-- [ ] EditorViewModel syncs to canvas
-- [ ] Colors update in real-time
+- [ ] ShapeTool creates ShapeAnnotation for all supported kinds
+- [ ] Preview renders correct shape kind
+- [ ] Styling (fill/stroke/width/radius) flows from UI state to tool
 
 ---
 
-### Phase 3: Integrate with Canvas (15 min)
+### Phase 3: UI Integration (45 min)
+
+**Sub-toolbar wireframe (shown when Shape tool active):**
+```
+Shapes: [□ Rect] [◧ Round] [○ Ellipse] [◇ Diamond] [△ Triangle]
+Props : Fill [■■■■]  Stroke [▭▭▭▭]  Width [ 2.0 px ▼]  Radius [ 8 ]
+        Opacity [====|====]  Snap [On/Off]
+```
 
 **Tasks:**
-
-1. **Test color sync** (15 min)
-   - Change color in properties panel
-   - Draw new rectangle
-   - Verify it uses new color
+1. Toolbar: keep single “Shape” button; opens sub-toolbar above.
+2. Shape picker buttons map to ShapeKind; selection updates ShapeTool state.
+3. Properties panel binds to fill/stroke/width (and radius for rectangle kinds); syncs into canvas/tool.
+4. Rendering: replace rectangle-specific drawing with shape-aware path rendering; ensure selection handles still use bounding box.
 
 **Acceptance Criteria:**
-- [ ] Color changes in UI affect new rectangles
-- [ ] Preview shows correct color
-- [ ] Colors persist across tool switches
+- [ ] Shape picker swaps the active shape kind without losing styling
+- [ ] Properties edits reflected in previews and created annotations
+- [ ] Only one Shape tool in main toolbar; sub-toolbar provides shape + properties controls
 
 ---
 
-### Phase 4: Test (20 min)
+### Phase 4: Test (30 min)
 
 **Manual Test Cases:**
+1. **Shape Creation**
+   - [ ] Draw Rect, Rounded, Ellipse, Diamond, Triangle → correct geometry
+   - [ ] Preview matches final shape
+   - [ ] Undo/redo for each shape
 
-1. **Color Sync**
-   - [ ] Change fill color → draw rectangle → uses new fill
-   - [ ] Change stroke color → draw rectangle → uses new stroke
-   - [ ] Change both → both update
+2. **Properties**
+   - [ ] Fill/stroke/width applied to new shapes
+   - [ ] Radius only affects rectangle kinds
+   - [ ] Opacity snap or grid snap still respected
 
-2. **Color Persistence**
-   - [ ] Set custom colors → switch to Select → switch back → colors preserved
-   - [ ] Draw multiple rectangles → all use current colors
+3. **Transforms**
+   - [ ] Rotate/flip/scale works on all shapes (rendering follows transform)
+   - [ ] Align/distribute operate on new ShapeAnnotation
 
-3. **Default Colors**
-   - [ ] Fresh start → default colors work
-   - [ ] Reset colors → returns to defaults
-
-4. **Undo/Redo**
-   - [ ] Create rectangle with red → change to blue → create another
-   - [ ] Undo second → first is still red
-   - [ ] Redo → second is blue
+4. **UI Flow**
+   - [ ] Switching shapes retains last-used styling
+   - [ ] Sub-toolbar appears only when Shape tool active
+   - [ ] No regression for Select tool behaviors
 
 **Acceptance Criteria:**
 - [ ] All test cases pass
-- [ ] UI colors sync immediately
+- [ ] Shape tool replaces rectangle-only flow with multi-shape support
 - [ ] No color flickering or delays
 
 ---
@@ -1551,7 +1523,7 @@ After all tools implemented, perform comprehensive integration testing:
 
 ### Week 1
 - **Day 1 (AM):** Complete Select Tool (Tool 0A) - Move annotations
-- **Day 1 (PM):** Complete Rectangle Tool (Tool 0B) - Properties integration
+- **Day 1 (PM):** Complete Shape Tool (Tool 0B) - Multi-shape + properties integration
 - **Day 2:** Line Tool (complete all 4 phases)
 - **Day 3-4:** Text Tool (complete all 4 phases)
 - **Day 5:** Freehand Tool (Phases 1-2)
@@ -1595,12 +1567,12 @@ After all tools implemented, perform comprehensive integration testing:
 
 ## Notes
 
-- SelectTool and RectangleTool need completion before new tools
+- SelectTool and ShapeTool need completion before new tools
 - MoveAnnotationsCommand is a new command type (9th command)
 - No other canvas APIs needed (all tools use existing CRUD/transform APIs)
 - Focus on tool-specific behavior and rendering
 - Properties panels can be added incrementally
 - JSON serialization will be batch-implemented after all tools complete
 
-**Current Status:** 0/10 tools fully complete (Select and Rectangle are ~80% done)
+**Current Status:** 0/10 tools fully complete (Select and Shape are in progress)
 **Next Up:** Tool 0A → Select Tool → Phase 1 (Move Annotations)

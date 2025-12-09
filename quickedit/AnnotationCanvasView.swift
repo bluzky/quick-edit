@@ -138,14 +138,13 @@ struct AnnotationCanvasView: View {
     private func drawAnnotations(in context: inout GraphicsContext) {
         let sorted = canvas.annotations.sorted { $0.zIndex < $1.zIndex }
         for annotation in sorted where annotation.visible {
-            if let rectAnnotation = annotation as? RectangleAnnotation {
-                drawRectangle(rectAnnotation, in: &context)
+            if let shapeAnnotation = annotation as? ShapeAnnotation {
+                drawShape(shapeAnnotation, in: &context)
             }
         }
     }
 
-    private func drawRectangle(_ annotation: RectangleAnnotation, in context: inout GraphicsContext) {
-        // Apply transforms (scale, rotation, flip)
+    private func drawShape(_ annotation: ShapeAnnotation, in context: inout GraphicsContext) {
         let transform = annotation.transform
         let basePosition = canvas.imageToCanvas(transform.position)
         let scaledSize = CGSize(
@@ -153,22 +152,22 @@ struct AnnotationCanvasView: View {
             height: annotation.size.height * transform.scale.height * canvas.zoomLevel
         )
 
-        // Calculate center point for rotation
         let centerX = basePosition.x + (scaledSize.width / 2)
         let centerY = basePosition.y + (scaledSize.height / 2)
 
         var contextCopy = context
-
-        // Apply transformations: translate to center, rotate, scale, translate back
         contextCopy.translateBy(x: centerX, y: centerY)
         contextCopy.rotate(by: transform.rotation)
         contextCopy.translateBy(x: -scaledSize.width / 2, y: -scaledSize.height / 2)
 
-        // Draw rectangle at origin (already translated)
-        let rect = CGRect(origin: .zero, size: CGSize(width: abs(scaledSize.width), height: abs(scaledSize.height)))
-        let path = Path(rect)
+        let path = makeShapePath(
+            kind: annotation.shapeKind,
+            size: CGSize(width: abs(scaledSize.width), height: abs(scaledSize.height)),
+            cornerRadius: annotation.cornerRadius
+        )
+
         contextCopy.fill(path, with: .color(annotation.fill))
-        contextCopy.stroke(path, with: .color(annotation.stroke), lineWidth: 1.5)
+        contextCopy.stroke(path, with: .color(annotation.stroke), lineWidth: annotation.strokeWidth)
     }
 
     private func drawSelectionHandles(in context: inout GraphicsContext) {

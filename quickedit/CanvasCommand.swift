@@ -194,6 +194,13 @@ final class UpdatePropertiesCommand: CanvasCommand {
         props["visible"] = annotation.visible
         props["locked"] = annotation.locked
         props["zIndex"] = annotation.zIndex
+        if let shape = annotation as? ShapeAnnotation {
+            props["fill"] = shape.fill
+            props["stroke"] = shape.stroke
+            props["strokeWidth"] = shape.strokeWidth
+            props["shapeKind"] = shape.shapeKind
+            props["cornerRadius"] = shape.cornerRadius
+        }
         return props
     }
 
@@ -212,6 +219,24 @@ final class UpdatePropertiesCommand: CanvasCommand {
         }
         if let zIndex = properties["zIndex"] as? Int {
             annotation.zIndex = zIndex
+        }
+        if var shape = annotation as? ShapeAnnotation {
+            if let fill = properties["fill"] as? Color {
+                shape.fill = fill
+            }
+            if let stroke = properties["stroke"] as? Color {
+                shape.stroke = stroke
+            }
+            if let strokeWidth = properties["strokeWidth"] as? CGFloat {
+                shape.strokeWidth = strokeWidth
+            }
+            if let shapeKind = properties["shapeKind"] as? ShapeKind {
+                shape.shapeKind = shapeKind
+            }
+            if let cornerRadius = properties["cornerRadius"] as? CGFloat {
+                shape.cornerRadius = cornerRadius
+            }
+            annotation = shape
         }
     }
 }

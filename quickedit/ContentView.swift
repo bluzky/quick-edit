@@ -54,6 +54,7 @@ private enum ValidationConstants {
 
     // Shape validation
     static let shapeStrokeWidthRange: ClosedRange<Double> = 0...50
+    static let shapeCornerRadiusRange: ClosedRange<Double> = 0...200
 
     // Text validation
     static let fontSizeRange: ClosedRange<Double> = 6...144
@@ -183,6 +184,11 @@ enum FontChoice: String, CaseIterable, Codable {
 enum ToolIdentifier: String, CaseIterable {
     case select, freehand, highlight, blur, line, shape, text, number, image, note
 
+    enum Behavior {
+        case sticky   // stays active after use
+        case momentary // returns to select after completion
+    }
+
     var label: String {
         switch self {
         case .select: return "Select"
@@ -219,9 +225,18 @@ enum ToolIdentifier: String, CaseIterable {
         case .select:
             return ToolRegistry.shared.tool(withID: "select")
         case .shape:
-            return ToolRegistry.shared.tool(withID: "rectangle")
+            return ToolRegistry.shared.tool(withID: "shape")
         default:
             return nil  // TODO: Implement other tools
+        }
+    }
+
+    var behavior: Behavior {
+        switch self {
+        case .line, .shape, .text, .note, .image:
+            return .momentary
+        default:
+            return .sticky
         }
     }
 }
@@ -265,6 +280,11 @@ struct ShapeProperties {
     var strokeWidth: Double = 2.0 {
         didSet {
             strokeWidth = strokeWidth.clamped(to: ValidationConstants.shapeStrokeWidthRange)
+        }
+    }
+    var cornerRadius: Double = 10 {
+        didSet {
+            cornerRadius = cornerRadius.clamped(to: ValidationConstants.shapeCornerRadiusRange)
         }
     }
 }
@@ -363,10 +383,6 @@ enum LineCap: String, CaseIterable {
     case butt = "Butt", round = "Round", square = "Square"
 }
 
-enum ShapeKind: String, CaseIterable {
-    case rectangle = "Rectangle", circle = "Circle", ellipse = "Ellipse", triangle = "Triangle"
-}
-
 enum TextAlignmentChoice: String, CaseIterable {
     case left = "Left", center = "Center", right = "Right", justify = "Justify"
 }
@@ -388,6 +404,7 @@ final class EditorViewModel: ObservableObject {
                 canvas.setActiveTool(nil)
             }
             syncColorFromTool()
+            shouldReturnToSelect = (selectedTool.behavior == .momentary)
         }
     }
     @Published var selectedColor: Color = Color.accentColor
@@ -403,6 +420,7 @@ final class EditorViewModel: ObservableObject {
     @Published var image = ImageProperties()
 
     private var cancellables = Set<AnyCancellable>()
+    private var shouldReturnToSelect = false
 
     init(canvas: AnnotationCanvas) {
         self.canvas = canvas
@@ -425,10 +443,33 @@ final class EditorViewModel: ObservableObject {
             }
             .store(in: &cancellables)
 
+        // Keep ShapeTool in sync with UI properties
+        $shape
+            .receive(on: RunLoop.main)
+            .sink { [weak self] shapeProps in
+                self?.applyShapeProperties(shapeProps)
+            }
+            .store(in: &cancellables)
+
         // Activate the initial tool (didSet doesn't trigger during initialization)
         if let tool = selectedTool.createTool() {
             canvas.setActiveTool(tool)
         }
+
+        // Seed tool state with initial properties
+        applyShapeProperties(shape)
+
+        // Listen for interaction end to auto-return to select for momentary tools
+        canvas.onInteractionEnded
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                if self.shouldReturnToSelect {
+                    self.selectedTool = .select
+                    self.shouldReturnToSelect = false
+                }
+            }
+            .store(in: &cancellables)
     }
 
     func resetNumberCounter() {
@@ -490,6 +531,24 @@ final class EditorViewModel: ObservableObject {
             break
         }
     }
+
+    private func applyShapeProperties(_ shapeProps: ShapeProperties) {
+        if let shapeTool = ToolRegistry.shared.tool(withID: "shape") as? ShapeTool {
+            shapeTool.updateStyle(
+                fill: shapeProps.fillColor,
+                stroke: shapeProps.strokeColor,
+                strokeWidth: CGFloat(shapeProps.strokeWidth),
+                cornerRadius: CGFloat(shapeProps.cornerRadius),
+                shapeKind: shapeProps.shape
+            )
+        }
+    }
+
+    // Called from UI when a tool is activated
+    func activateTool(_ tool: ToolIdentifier) {
+        shouldReturnToSelect = (tool.behavior == .momentary)
+        selectedTool = tool
+    }
 }
 
 struct ContentView: View {
@@ -511,6 +570,7 @@ struct ContentView: View {
             MainToolbar(
                 canvas: canvas,
                 selectedTool: $viewModel.selectedTool,
+                onSelectTool: { tool in viewModel.activateTool(tool) },
                 onColor: { showingColorSheet = true },
                 onUndo: { canvas.undo() },
                 onRedo: { canvas.redo() },
@@ -533,7 +593,10 @@ struct ContentView: View {
         }
         .onChange(of: canvas.snapToGrid) { _, isOn in
             if isOn {
-                canvas.applyGridSnapping(enabled: true, gridSize: canvas.gridSize)
+                // Defer to avoid publishing changes during view updates
+                DispatchQueue.main.async {
+                    canvas.applyGridSnapping(enabled: true, gridSize: canvas.gridSize)
+                }
             }
         }
     }
@@ -649,16 +712,21 @@ struct ShapePropertiesView: View {
     var body: some View {
         HStack(spacing: UIConstants.propertiesSpacing) {
             Picker("Shape", selection: $shape.shape) {
-                ForEach(ShapeKind.allCases, id: \.self) { shape in
-                    Text(shape.rawValue).tag(shape)
+                ForEach(ShapeKind.allCases, id: \.self) { shapeKind in
+                    Text(shapeKind.rawValue).tag(shapeKind)
                 }
             }
             .pickerStyle(.segmented)
+
             ColorPicker("Fill", selection: $shape.fillColor, supportsOpacity: true)
                 .labelsHidden()
             ColorPicker("Stroke", selection: $shape.strokeColor, supportsOpacity: true)
                 .labelsHidden()
             SliderWithLabel(label: "Stroke", value: $shape.strokeWidth, range: 0...20, step: 0.5)
+
+            if shape.shape.supportsCornerRadius {
+                SliderWithLabel(label: "Radius", value: $shape.cornerRadius, range: ValidationConstants.shapeCornerRadiusRange, step: 2)
+            }
         }
     }
 }
@@ -949,6 +1017,7 @@ struct SettingsSheet: View {
 struct MainToolbar: View {
     @ObservedObject var canvas: AnnotationCanvas
     @Binding var selectedTool: ToolIdentifier
+    let onSelectTool: (ToolIdentifier) -> Void
     let onColor: () -> Void
     let onUndo: () -> Void
     let onRedo: () -> Void
@@ -990,7 +1059,7 @@ struct MainToolbar: View {
     private func toolbarGroup(title: String, category: ToolCategory) -> some View {
         HStack(spacing: UIConstants.toolSpacing) {
             ForEach(items.filter { $0.category == category }) { item in
-                ToolbarButton(item: item, selectedTool: $selectedTool)
+                ToolbarButton(item: item, selectedTool: $selectedTool, onSelectTool: onSelectTool)
             }
         }
     }
@@ -999,6 +1068,7 @@ struct MainToolbar: View {
 struct ToolbarButton: View {
     let item: MainToolbarItem
     @Binding var selectedTool: ToolIdentifier
+    let onSelectTool: (ToolIdentifier) -> Void
 
     var isSelected: Bool {
         guard let tool = item.tool else { return false }
@@ -1008,7 +1078,7 @@ struct ToolbarButton: View {
     var body: some View {
         Button {
             if let tool = item.tool {
-                selectedTool = tool
+                onSelectTool(tool)
             } else {
                 item.action?()
             }
