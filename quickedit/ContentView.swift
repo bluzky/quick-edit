@@ -13,14 +13,15 @@ import Combine
 private enum UIConstants {
     // Sheet sizes
     static let colorSheetHeight: CGFloat = 320
-    static let settingsSheetHeight: CGFloat = 260
+    static let settingsSheetHeight: CGFloat = 300
 
     // Layout spacing
     static let toolbarHorizontalPadding: CGFloat = 12
     static let toolbarVerticalPadding: CGFloat = 8
     static let toolbarSpacing: CGFloat = 16
     static let toolSpacing: CGFloat = 8
-    static let propertiesSpacing: CGFloat = 12
+    static let propertiesSpacing: CGFloat = 8
+    static let barHeight: CGFloat = 44
 
     // Button dimensions
     static let buttonHorizontalPadding: CGFloat = 10
@@ -179,7 +180,7 @@ enum FontChoice: String, CaseIterable, Codable {
 
 // MARK: - Annotation Tools
 
-enum AnnotationTool: String, CaseIterable {
+enum ToolIdentifier: String, CaseIterable {
     case select, freehand, highlight, blur, line, shape, text, number, image, note
 
     var label: String {
@@ -211,6 +212,18 @@ enum AnnotationTool: String, CaseIterable {
         case .note: return "note.text"
         }
     }
+
+    /// Create the protocol-based tool for this identifier
+    func createTool() -> (any AnnotationTool)? {
+        switch self {
+        case .select:
+            return ToolRegistry.shared.tool(withID: "select")
+        case .shape:
+            return ToolRegistry.shared.tool(withID: "rectangle")
+        default:
+            return nil  // TODO: Implement other tools
+        }
+    }
 }
 
 enum ToolCategory {
@@ -219,7 +232,7 @@ enum ToolCategory {
 
 struct MainToolbarItem: Identifiable {
     let id = UUID()
-    let tool: AnnotationTool?
+    let tool: ToolIdentifier?
     let title: String
     let systemName: String
     let category: ToolCategory
@@ -363,15 +376,20 @@ enum NumberShapeStyle: String, CaseIterable {
 }
 
 final class EditorViewModel: ObservableObject {
-    @Published var selectedTool: AnnotationTool = .select {
+    let canvas: AnnotationCanvas
+    @Published var selectedTool: ToolIdentifier = .select {
         didSet {
-            // Update selectedColor to reflect the current tool's primary color
+            // Sync UI tool selection with canvas tool
+            if let tool = selectedTool.createTool() {
+                if canvas.activeTool?.id != tool.id {
+                    canvas.setActiveTool(tool)
+                }
+            } else {
+                canvas.setActiveTool(nil)
+            }
             syncColorFromTool()
         }
     }
-    @Published var snapToGrid: Bool = false
-    @Published var alignmentGuides: Bool = true
-    @Published var rulers: Bool = false
     @Published var selectedColor: Color = Color.accentColor
 
     @Published var line = LineProperties()
@@ -383,6 +401,35 @@ final class EditorViewModel: ObservableObject {
     @Published var blur = BlurProperties()
     @Published var note = NoteProperties()
     @Published var image = ImageProperties()
+
+    private var cancellables = Set<AnyCancellable>()
+
+    init(canvas: AnnotationCanvas) {
+        self.canvas = canvas
+
+        // Keep selected tool in sync with the canvas
+        canvas.$activeTool
+            .compactMap { $0?.id }
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] toolID in
+                guard let self else { return }
+                // Map tool ID back to enum for UI
+                if let identifier = ToolIdentifier.allCases.first(where: {
+                    $0.createTool()?.id == toolID
+                }) {
+                    if self.selectedTool != identifier {
+                        self.selectedTool = identifier
+                    }
+                }
+            }
+            .store(in: &cancellables)
+
+        // Activate the initial tool (didSet doesn't trigger during initialization)
+        if let tool = selectedTool.createTool() {
+            canvas.setActiveTool(tool)
+        }
+    }
 
     func resetNumberCounter() {
         number.current = 1
@@ -446,19 +493,27 @@ final class EditorViewModel: ObservableObject {
 }
 
 struct ContentView: View {
-    @StateObject private var viewModel = EditorViewModel()
+    @StateObject private var canvas: AnnotationCanvas
+    @StateObject private var viewModel: EditorViewModel
     @State private var showingColorSheet = false
     @State private var showingSettingsSheet = false
+
+    init() {
+        let canvas = AnnotationCanvas()
+        _canvas = StateObject(wrappedValue: canvas)
+        _viewModel = StateObject(wrappedValue: EditorViewModel(canvas: canvas))
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             canvasArea
             PropertiesToolbar(viewModel: viewModel)
             MainToolbar(
-                viewModel: viewModel,
+                canvas: canvas,
+                selectedTool: $viewModel.selectedTool,
                 onColor: { showingColorSheet = true },
-                onUndo: {},
-                onRedo: {},
+                onUndo: { canvas.undo() },
+                onRedo: { canvas.redo() },
                 onSettings: { showingSettingsSheet = true }
             )
         }
@@ -472,30 +527,20 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showingSettingsSheet) {
             SettingsSheet(
-                snapToGrid: $viewModel.snapToGrid,
-                alignmentGuides: $viewModel.alignmentGuides,
-                rulers: $viewModel.rulers
+                canvas: canvas
             )
             .presentationDetents([.height(UIConstants.settingsSheetHeight)])
+        }
+        .onChange(of: canvas.snapToGrid) { _, isOn in
+            if isOn {
+                canvas.applyGridSnapping(enabled: true, gridSize: canvas.gridSize)
+            }
         }
     }
 
     private var canvasArea: some View {
-        ZStack {
-            Color(nsColor: .controlBackgroundColor)
-            VStack(spacing: UIConstants.canvasSpacing) {
-                Image(systemName: "photo.on.rectangle")
-                    .font(.system(size: UIConstants.canvasIconSize))
-                    .foregroundColor(.secondary)
-                Text("Canvas Area")
-                    .font(.headline)
-                    .foregroundColor(.secondary)
-                Text("Select a tool below to configure properties")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        AnnotationCanvasView(canvas: canvas)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -514,10 +559,12 @@ struct PropertiesToolbar: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, UIConstants.toolbarHorizontalPadding)
-            .padding(.vertical, UIConstants.toolbarVerticalPadding)
+            .padding(.vertical, 2)
             .background(Color(nsColor: .separatorColor).opacity(0.1))
+            .controlSize(.small)
             Divider()
         }
+        .frame(height: UIConstants.barHeight) // Match toolbar height
     }
 
     @ViewBuilder
@@ -549,7 +596,7 @@ struct PropertiesToolbar: View {
 }
 
 struct ToolIndicator: View {
-    let tool: AnnotationTool
+    let tool: ToolIdentifier
 
     var body: some View {
         HStack(spacing: UIConstants.toolSpacing) {
@@ -857,17 +904,40 @@ struct ColorUtilitySheet: View {
 }
 
 struct SettingsSheet: View {
-    @Binding var snapToGrid: Bool
-    @Binding var alignmentGuides: Bool
-    @Binding var rulers: Bool
+    @ObservedObject var canvas: AnnotationCanvas
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Settings")
                 .font(.headline)
-            Toggle("Snap to Grid (8px)", isOn: $snapToGrid)
-            Toggle("Alignment Guides", isOn: $alignmentGuides)
-            Toggle("Show Rulers", isOn: $rulers)
+
+            // Grid Settings
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Snap to Grid (\(Int(canvas.gridSize))px)", isOn: $canvas.snapToGrid)
+
+                HStack {
+                    Text("Grid Size:")
+                        .foregroundColor(.secondary)
+                    Stepper(
+                        value: $canvas.gridSize,
+                        in: 4...64,
+                        step: 4
+                    ) {
+                        Text("\(Int(canvas.gridSize))px")
+                            .frame(width: 50, alignment: .trailing)
+                    }
+                }
+                .padding(.leading, 20)
+
+                Toggle("Show Grid", isOn: $canvas.showGrid)
+            }
+
+            Divider()
+
+            // Other Settings
+            Toggle("Alignment Guides", isOn: $canvas.showAlignmentGuides)
+            Toggle("Show Rulers", isOn: $canvas.showRulers)
+
             Spacer()
         }
         .padding()
@@ -877,7 +947,8 @@ struct SettingsSheet: View {
 // MARK: - Main Toolbar
 
 struct MainToolbar: View {
-    @ObservedObject var viewModel: EditorViewModel
+    @ObservedObject var canvas: AnnotationCanvas
+    @Binding var selectedTool: ToolIdentifier
     let onColor: () -> Void
     let onUndo: () -> Void
     let onRedo: () -> Void
@@ -919,7 +990,7 @@ struct MainToolbar: View {
     private func toolbarGroup(title: String, category: ToolCategory) -> some View {
         HStack(spacing: UIConstants.toolSpacing) {
             ForEach(items.filter { $0.category == category }) { item in
-                ToolbarButton(item: item, selectedTool: $viewModel.selectedTool)
+                ToolbarButton(item: item, selectedTool: $selectedTool)
             }
         }
     }
@@ -927,7 +998,7 @@ struct MainToolbar: View {
 
 struct ToolbarButton: View {
     let item: MainToolbarItem
-    @Binding var selectedTool: AnnotationTool
+    @Binding var selectedTool: ToolIdentifier
 
     var isSelected: Bool {
         guard let tool = item.tool else { return false }
