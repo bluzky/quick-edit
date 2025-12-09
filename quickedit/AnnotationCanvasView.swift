@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct AnnotationCanvasView: View {
     @ObservedObject var canvas: AnnotationCanvas
@@ -19,33 +20,39 @@ struct AnnotationCanvasView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            Canvas { context, size in
-                // Depend on redrawTrigger to force redraw during tool preview
-                let _ = redrawTrigger
+            ScrollWheelPanContainer(onScroll: { delta in
+                // Trackpad two-finger scroll pans the canvas (natural direction)
+                let adjusted = CGPoint(x: delta.x, y: delta.y)
+                canvas.pan(by: adjusted)
+            }) {
+                Canvas { context, size in
+                    // Depend on redrawTrigger to force redraw during tool preview
+                    let _ = redrawTrigger
 
 
-                // Draw background
-                context.fill(
-                    Path(CGRect(origin: .zero, size: size)),
-                    with: .color(Color(nsColor: .controlBackgroundColor))
-                )
+                    // Draw background (#f5f5f5 - light gray)
+                    context.fill(
+                        Path(CGRect(origin: .zero, size: size)),
+                        with: .color(Color(red: 0xf5 / 255.0, green: 0xf5 / 255.0, blue: 0xf5 / 255.0))
+                    )
 
-                if canvas.showGrid {
-                    drawGrid(in: &context, size: size)
+                    if canvas.showGrid {
+                        drawGrid(in: &context, size: size)
+                    }
+
+                    drawAnnotations(in: &context)
+                    drawSelectionHandles(in: &context)
+
+                    // Tool preview overlay
+                    if let tool = canvas.activeTool {
+                        tool.renderPreview(in: &context, canvas: canvas)
+                    }
                 }
-
-                drawAnnotations(in: &context)
-                drawSelectionHandles(in: &context)
-
-                // Tool preview overlay
-                if let tool = canvas.activeTool {
-                    tool.renderPreview(in: &context, canvas: canvas)
+                .gesture(dragGesture)
+                .simultaneousGesture(magnificationGesture)
+                .onChange(of: geometry.size) { _, newValue in
+                    canvas.updateCanvasSize(newValue)
                 }
-            }
-            .gesture(dragGesture)
-            .simultaneousGesture(magnificationGesture)
-            .onChange(of: geometry.size) { _, newValue in
-                canvas.updateCanvasSize(newValue)
             }
         }
     }
@@ -194,25 +201,59 @@ struct AnnotationCanvasView: View {
         let startX = fmod(canvas.panOffset.x, spacing)
         let startY = fmod(canvas.panOffset.y, spacing)
 
-        var gridPath = Path()
+        // Draw dot grid (#c4c4c4)
+        let dotColor = Color(red: 0xc4 / 255.0, green: 0xc4 / 255.0, blue: 0xc4 / 255.0)
+        let dotRadius: CGFloat = 1.0
+
         var x = startX
         while x < size.width {
-            gridPath.move(to: CGPoint(x: x, y: 0))
-            gridPath.addLine(to: CGPoint(x: x, y: size.height))
+            var y = startY
+            while y < size.height {
+                let dotRect = CGRect(x: x - dotRadius, y: y - dotRadius, width: dotRadius * 2, height: dotRadius * 2)
+                context.fill(Path(ellipseIn: dotRect), with: .color(dotColor))
+                y += spacing
+            }
             x += spacing
         }
-
-        var y = startY
-        while y < size.height {
-            gridPath.move(to: CGPoint(x: 0, y: y))
-            gridPath.addLine(to: CGPoint(x: size.width, y: y))
-            y += spacing
-        }
-
-        context.stroke(gridPath, with: .color(Color.gray.opacity(0.2)), lineWidth: 1)
     }
 }
 
 private extension CGSize {
     var center: CGPoint { CGPoint(x: width / 2, y: height / 2) }
+}
+
+// MARK: - Scroll Wheel Support
+
+/// Hosts SwiftUI content and intercepts scroll wheel events to drive panning
+private struct ScrollWheelPanContainer<Content: View>: NSViewRepresentable {
+    let onScroll: (CGPoint) -> Void
+    let content: Content
+
+    init(onScroll: @escaping (CGPoint) -> Void, @ViewBuilder content: () -> Content) {
+        self.onScroll = onScroll
+        self.content = content()
+    }
+
+    func makeNSView(context: Context) -> ScrollWheelPanHostingView<Content> {
+        let host = ScrollWheelPanHostingView(rootView: content)
+        host.onScroll = onScroll
+        return host
+    }
+
+    func updateNSView(_ nsView: ScrollWheelPanHostingView<Content>, context: Context) {
+        nsView.onScroll = onScroll
+        nsView.rootView = content
+    }
+}
+
+private final class ScrollWheelPanHostingView<Content: View>: NSHostingView<Content> {
+    var onScroll: ((CGPoint) -> Void)?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func scrollWheel(with event: NSEvent) {
+        guard event.phase != .ended else { return }
+        onScroll?(CGPoint(x: event.scrollingDeltaX, y: event.scrollingDeltaY))
+        // Avoid super to keep the event from trying to scroll enclosing views
+    }
 }

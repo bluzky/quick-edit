@@ -200,6 +200,25 @@ canvas.rotate90()         // Rotate selected 90° clockwise
 canvas.flipHorizontal()   // Mirror selected horizontally
 ```
 
+### Move
+
+```swift
+func moveAnnotations(_ ids: Set<UUID>, by delta: CGPoint)
+```
+
+Move annotations by a delta offset in image space.
+
+**Example:**
+```swift
+// Move selected annotations by 10 pixels right, 5 down
+canvas.moveAnnotations(canvas.selectedAnnotationIDs, by: CGPoint(x: 10, y: 5))
+
+// Undo to return to original position
+canvas.undo()
+```
+
+**Note:** Delta is in image space (zoom-independent). SelectTool uses this for drag-to-move functionality with live preview.
+
 ---
 
 ## Selection API

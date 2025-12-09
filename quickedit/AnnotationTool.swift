@@ -65,19 +65,25 @@ final class SelectTool: AnnotationTool {
     private var dragStartPoint: CGPoint?
     private var isDraggingAnnotations: Bool = false
     private var initialPanOffset: CGPoint?
+    private var originalPositions: [UUID: CGPoint] = [:]  // Track original positions for live preview
 
     func onMouseDown(at point: CGPoint, on canvas: AnnotationCanvas) {
         dragStartPoint = point
 
         // Hit test to find annotation at point (point is in canvas space)
         if let hit = canvas.annotation(at: point) {
-            // If clicking an already selected annotation, prepare to drag
-            if canvas.selectedAnnotationIDs.contains(hit.id) {
-                isDraggingAnnotations = true
-            } else {
-                // Select the annotation
+            // If clicking an unselected annotation, select it first
+            if !canvas.selectedAnnotationIDs.contains(hit.id) {
                 canvas.toggleSelection(for: hit.id)
-                isDraggingAnnotations = false
+            }
+
+            // Now prepare to drag (works for both previously selected and newly selected)
+            isDraggingAnnotations = true
+
+            // Save original positions of all selected annotations
+            originalPositions.removeAll()
+            for annotation in canvas.annotations where canvas.selectedAnnotationIDs.contains(annotation.id) {
+                originalPositions[annotation.id] = annotation.transform.position
             }
         } else {
             // Clicking empty space - prepare to pan
@@ -91,8 +97,23 @@ final class SelectTool: AnnotationTool {
         guard let startPoint = dragStartPoint else { return }
 
         if isDraggingAnnotations {
-            // TODO: Move selected annotations
-            // This would require a MoveAnnotationsCommand
+            // Live preview: directly update annotation positions during drag
+            let startImage = canvas.canvasToImage(startPoint)
+            let currentImage = canvas.canvasToImage(point)
+            let delta = CGPoint(
+                x: currentImage.x - startImage.x,
+                y: currentImage.y - startImage.y
+            )
+
+            // Temporarily move annotations (direct mutation for preview)
+            for i in canvas.annotations.indices where canvas.selectedAnnotationIDs.contains(canvas.annotations[i].id) {
+                if let originalPos = originalPositions[canvas.annotations[i].id] {
+                    canvas.annotations[i].transform.position = CGPoint(
+                        x: originalPos.x + delta.x,
+                        y: originalPos.y + delta.y
+                    )
+                }
+            }
         } else {
             // Pan the canvas
             if let initialOffset = initialPanOffset {
@@ -109,15 +130,52 @@ final class SelectTool: AnnotationTool {
     }
 
     func onMouseUp(at point: CGPoint, on canvas: AnnotationCanvas) {
-        // Apply grid snapping if enabled and we were dragging annotations
-        if isDraggingAnnotations && canvas.snapToGrid {
-            canvas.applyGridSnapping(enabled: true, gridSize: canvas.gridSize)
+        if isDraggingAnnotations {
+            // Calculate final delta in image space
+            guard let startPoint = dragStartPoint else { return }
+            let startImage = canvas.canvasToImage(startPoint)
+            let endImage = canvas.canvasToImage(point)
+            var delta = CGPoint(
+                x: endImage.x - startImage.x,
+                y: endImage.y - startImage.y
+            )
+
+            // Reset to original positions before creating command
+            for i in canvas.annotations.indices where canvas.selectedAnnotationIDs.contains(canvas.annotations[i].id) {
+                if let originalPos = originalPositions[canvas.annotations[i].id] {
+                    canvas.annotations[i].transform.position = originalPos
+                }
+            }
+
+            // Apply grid snapping to the delta BEFORE creating command
+            if canvas.snapToGrid {
+                // Calculate where selection would end up
+                if let selectionBounds = canvas.selectionBoundingBox(for: canvas.selectedAnnotationIDs) {
+                    let wouldBeOrigin = CGPoint(
+                        x: selectionBounds.origin.x + delta.x,
+                        y: selectionBounds.origin.y + delta.y
+                    )
+                    let snappedOrigin = canvas.snapToGrid(wouldBeOrigin, gridSize: canvas.gridSize)
+
+                    // Adjust delta to include snap
+                    delta = CGPoint(
+                        x: snappedOrigin.x - selectionBounds.origin.x,
+                        y: snappedOrigin.y - selectionBounds.origin.y
+                    )
+                }
+            }
+
+            // Only create command if moved significantly (>1px to avoid micro-movements)
+            if abs(delta.x) > 1 || abs(delta.y) > 1 {
+                canvas.moveAnnotations(canvas.selectedAnnotationIDs, by: delta)
+            }
         }
 
         // Clean up state
         dragStartPoint = nil
         isDraggingAnnotations = false
         initialPanOffset = nil
+        originalPositions.removeAll()
     }
 
     func deactivate() {
@@ -125,6 +183,7 @@ final class SelectTool: AnnotationTool {
         dragStartPoint = nil
         isDraggingAnnotations = false
         initialPanOffset = nil
+        originalPositions.removeAll()
     }
 }
 

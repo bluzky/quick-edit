@@ -538,3 +538,44 @@ final class RotateCommand: CanvasCommand {
         }
     }
 }
+
+// MARK: - Move Command
+
+/// Command to move annotations by a delta offset
+final class MoveAnnotationsCommand: CanvasCommand {
+    let annotationIDs: Set<UUID>
+    let delta: CGPoint
+    private var originalPositions: [UUID: CGPoint] = [:]
+
+    var actionName: String {
+        annotationIDs.count == 1 ? "Move Annotation" : "Move \(annotationIDs.count) Annotations"
+    }
+
+    init(annotationIDs: Set<UUID>, delta: CGPoint) {
+        self.annotationIDs = annotationIDs
+        self.delta = delta
+    }
+
+    func execute(on canvas: AnnotationCanvas) {
+        // Save original positions before moving
+        for i in canvas.annotations.indices where annotationIDs.contains(canvas.annotations[i].id) {
+            originalPositions[canvas.annotations[i].id] = canvas.annotations[i].transform.position
+
+            // Apply delta to position
+            canvas.annotations[i].transform.position.x += delta.x
+            canvas.annotations[i].transform.position.y += delta.y
+
+            canvas.onAnnotationModified.send(canvas.annotations[i].id)
+        }
+    }
+
+    func undo(on canvas: AnnotationCanvas) {
+        // Restore original positions
+        for i in canvas.annotations.indices where annotationIDs.contains(canvas.annotations[i].id) {
+            if let originalPos = originalPositions[canvas.annotations[i].id] {
+                canvas.annotations[i].transform.position = originalPos
+                canvas.onAnnotationModified.send(canvas.annotations[i].id)
+            }
+        }
+    }
+}

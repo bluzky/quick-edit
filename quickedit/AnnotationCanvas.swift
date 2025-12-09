@@ -131,8 +131,8 @@ final class AnnotationCanvas: ObservableObject {
     // MARK: - View State
     @Published var zoomLevel: CGFloat = ZoomConfig.defaultZoom  // 0.1 to 5.0
     @Published var panOffset: CGPoint = .zero
-    @Published var showGrid: Bool = false
-    @Published var gridSize: CGFloat = 8
+    @Published var showGrid: Bool = true
+    @Published var gridSize: CGFloat = 16
     @Published var snapToGrid: Bool = false
     @Published var showAlignmentGuides: Bool = true
     @Published var showRulers: Bool = false
@@ -238,7 +238,16 @@ final class AnnotationCanvas: ObservableObject {
     func selectionBoundingBox(for ids: Set<UUID>) -> CGRect? {
         let selected = annotations.compactMap { annotation -> CGRect? in
             guard ids.contains(annotation.id) else { return nil }
-            return CGRect(origin: annotation.transform.position, size: annotation.size)
+
+            // Account for scale when calculating bounding box
+            let scaledSize = CGSize(
+                width: annotation.size.width * abs(annotation.transform.scale.width),
+                height: annotation.size.height * abs(annotation.transform.scale.height)
+            )
+
+            // Note: This still doesn't account for rotation (which requires rotating the corners)
+            // For now, we use the axis-aligned bounding box of the scaled shape
+            return CGRect(origin: annotation.transform.position, size: scaledSize)
         }
 
         guard let first = selected.first else { return nil }
@@ -419,6 +428,18 @@ final class AnnotationCanvas: ObservableObject {
         rotate(.flipVertical, for: ids)
     }
 
+    // MARK: - Move API
+
+    /// Move annotations by a delta offset
+    /// - Parameters:
+    ///   - ids: Set of annotation IDs to move
+    ///   - delta: Movement offset in image space
+    func moveAnnotations(_ ids: Set<UUID>, by delta: CGPoint) {
+        guard !ids.isEmpty else { return }
+        let command = MoveAnnotationsCommand(annotationIDs: ids, delta: delta)
+        execute(command)
+    }
+
     // MARK: - History API
 
     /// Undo the last command
@@ -460,8 +481,11 @@ final class AnnotationCanvas: ObservableObject {
         )
     }
 
+    /// Apply grid snapping to selected annotations
+    /// This creates a MoveAnnotationsCommand for undo/redo support
     func applyGridSnapping(enabled: Bool, gridSize: CGFloat) {
         guard enabled else { return }
+        guard !selectedAnnotationIDs.isEmpty else { return }
 
         // Snap selection bounding box (works for single + multi-select)
         guard let selectionBounds = selectionBoundingBox(for: selectedAnnotationIDs) else { return }
@@ -471,15 +495,11 @@ final class AnnotationCanvas: ObservableObject {
             y: snappedOrigin.y - selectionBounds.origin.y
         )
 
-        // Move all selected annotations by the same delta to preserve relative layout
-        for id in selectedAnnotationIDs {
-            guard let index = annotations.firstIndex(where: { $0.id == id }) else { continue }
-            var transform = annotations[index].transform
-            transform.position.x += delta.x
-            transform.position.y += delta.y
-            annotations[index].transform = transform
-            onAnnotationModified.send(annotations[index].id)
-        }
+        // Only snap if there's a meaningful delta
+        guard abs(delta.x) > 0.1 || abs(delta.y) > 0.1 else { return }
+
+        // Use moveAnnotations to apply snap (goes through command pattern for undo/redo)
+        moveAnnotations(selectedAnnotationIDs, by: delta)
     }
 
     // MARK: - Zoom / Pan

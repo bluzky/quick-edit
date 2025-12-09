@@ -144,6 +144,7 @@ protocol CanvasCommand: AnyObject {
 - `AlignCommand` - Alignment
 - `DistributeCommand` - Even spacing
 - `RotateCommand` - Rotation/flip
+- `MoveAnnotationsCommand` - Move by delta
 
 **Architecture Role:** Mutation encapsulation
 

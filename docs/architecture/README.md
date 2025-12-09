@@ -63,10 +63,10 @@ SwiftUI Re-renders
 - ✅ **Rectangle** - Draw filled/stroked rectangles
 
 ### Tools
-- ✅ **SelectTool** - Select, deselect, pan canvas
+- ✅ **SelectTool** - Select, deselect, pan canvas, drag to move
 - ✅ **RectangleTool** - Draw rectangles with live preview
 
-### Commands (8 types)
+### Commands (9 types)
 - ✅ AddAnnotationCommand
 - ✅ DeleteAnnotationsCommand
 - ✅ UpdatePropertiesCommand
@@ -75,11 +75,12 @@ SwiftUI Re-renders
 - ✅ AlignCommand (7 modes)
 - ✅ DistributeCommand (even spacing)
 - ✅ RotateCommand (rotate/flip)
+- ✅ MoveAnnotationsCommand (drag to move)
 
 ### APIs (30+ methods)
 - Lifecycle: `addAnnotation()`, `deleteAnnotations()`, `deleteSelected()`
 - History: `undo()`, `redo()`, `clearHistory()`
-- Transforms: `rotate90()`, `flipHorizontal()`, `alignCenter()`, etc.
+- Transforms: `rotate90()`, `flipHorizontal()`, `alignCenter()`, `moveAnnotations()`, etc.
 - Selection: `selectAnnotations()`, `toggleSelection()`, `clearSelection()`
 - Pan/Zoom: `pan()`, `setZoom()`, `setPanOffset()`
 
@@ -178,12 +179,12 @@ final class LineTool: AnnotationTool {
 ✅ **0 errors, 0 warnings**
 
 **Files:**
-- CanvasCommand.swift: 541 lines
-- AnnotationTool.swift: 246 lines
-- AnnotationCanvas.swift: 572 lines
+- CanvasCommand.swift: 581 lines (9 command types)
+- AnnotationTool.swift: 292 lines (SelectTool with live preview)
+- AnnotationCanvas.swift: 584 lines (30+ APIs)
 - AnnotationCanvasView.swift: 218 lines
 
-**Total:** ~1,577 lines of canvas code
+**Total:** ~1,675 lines of canvas code
 
 ---
 
@@ -192,6 +193,7 @@ final class LineTool: AnnotationTool {
 **Manual Testing:**
 - ✅ Rectangle drawing with live preview
 - ✅ Selection with handles
+- ✅ Drag to move annotations (live preview)
 - ✅ Undo/redo for all operations
 - ✅ Canvas panning and zooming
 - ✅ Grid snapping
@@ -215,7 +217,7 @@ final class LineTool: AnnotationTool {
 
 **Next Features:**
 - JSON serialization (save/load)
-- Move annotations (drag selected)
+- Multi-selection (shift+click, box select)
 - Grouping (nested transforms)
 - Layers panel
 
