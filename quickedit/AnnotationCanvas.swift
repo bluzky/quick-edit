@@ -10,180 +10,6 @@ import SwiftUI
 import Combine
 import AppKit
 
-enum ShapeKind: String, CaseIterable {
-    case rectangle = "Rectangle"
-    case rounded = "Rounded"
-    case ellipse = "Ellipse"
-    case diamond = "Diamond"
-    case triangle = "Triangle"
-
-    var supportsCornerRadius: Bool {
-        self == .rectangle || self == .rounded
-    }
-}
-
-func makeShapePath(kind: ShapeKind, size: CGSize, cornerRadius: CGFloat) -> Path {
-    let width = max(size.width, 0)
-    let height = max(size.height, 0)
-
-    switch kind {
-    case .rectangle:
-        return Path(CGRect(origin: .zero, size: CGSize(width: width, height: height)))
-    case .rounded:
-        let radius = min(min(width, height) / 2, cornerRadius)
-        return Path(roundedRect: CGRect(origin: .zero, size: CGSize(width: width, height: height)), cornerSize: CGSize(width: radius, height: radius))
-    case .ellipse:
-        return Path(ellipseIn: CGRect(origin: .zero, size: CGSize(width: width, height: height)))
-    case .diamond:
-        let path = Path { p in
-            p.move(to: CGPoint(x: width / 2, y: 0))
-            p.addLine(to: CGPoint(x: width, y: height / 2))
-            p.addLine(to: CGPoint(x: width / 2, y: height))
-            p.addLine(to: CGPoint(x: 0, y: height / 2))
-            p.closeSubpath()
-        }
-        return path
-    case .triangle:
-        let path = Path { p in
-            p.move(to: CGPoint(x: width / 2, y: 0))
-            p.addLine(to: CGPoint(x: width, y: height))
-            p.addLine(to: CGPoint(x: 0, y: height))
-            p.closeSubpath()
-        }
-        return path
-    }
-}
-
-struct AnnotationTransform {
-    var position: CGPoint
-    var scale: CGSize
-    var rotation: Angle
-
-    static let identity = AnnotationTransform(
-        position: .zero,
-        scale: CGSize(width: 1, height: 1),
-        rotation: .zero
-    )
-}
-
-protocol Annotation: AnyObject, Identifiable {
-    var id: UUID { get }
-    var zIndex: Int { get set }
-    var visible: Bool { get set }
-    var locked: Bool { get set }
-    var transform: AnnotationTransform { get set }
-    var size: CGSize { get set }           // Stored in image space
-
-    func contains(point: CGPoint) -> Bool  // Point is in image space
-}
-
-final class ShapeAnnotation: Annotation {
-    let id: UUID = UUID()
-    var zIndex: Int
-    var visible: Bool = true
-    var locked: Bool = false
-    var transform: AnnotationTransform
-    var size: CGSize
-    var fill: Color
-    var stroke: Color
-    var strokeWidth: CGFloat
-    var shapeKind: ShapeKind
-    var cornerRadius: CGFloat
-
-    init(
-        zIndex: Int,
-        transform: AnnotationTransform,
-        size: CGSize,
-        fill: Color,
-        stroke: Color,
-        strokeWidth: CGFloat,
-        shapeKind: ShapeKind,
-        cornerRadius: CGFloat
-    ) {
-        self.zIndex = zIndex
-        self.transform = transform
-        self.size = size
-        self.fill = fill
-        self.stroke = stroke
-        self.strokeWidth = strokeWidth
-        self.shapeKind = shapeKind
-        self.cornerRadius = cornerRadius
-    }
-
-    func contains(point: CGPoint) -> Bool {
-        // Convert to local space: translate, unscale (including flips), then unrotate
-        var local = CGPoint(
-            x: point.x - transform.position.x,
-            y: point.y - transform.position.y
-        )
-
-        // Guard against zero scale to avoid division by zero
-        guard transform.scale.width != 0, transform.scale.height != 0 else {
-            return false
-        }
-
-        local.x /= transform.scale.width
-        local.y /= transform.scale.height
-
-        // Unrotate around the shape center
-        if transform.rotation != .zero {
-            let center = CGPoint(x: size.width / 2, y: size.height / 2)
-            let translated = CGPoint(x: local.x - center.x, y: local.y - center.y)
-            let angle = -transform.rotation.radians
-            let rotated = CGPoint(
-                x: translated.x * cos(angle) - translated.y * sin(angle),
-                y: translated.x * sin(angle) + translated.y * cos(angle)
-            )
-            local = CGPoint(x: rotated.x + center.x, y: rotated.y + center.y)
-        }
-
-        // Hit test against filled path plus stroke
-        let basePath = makeShapePath(kind: shapeKind, size: size, cornerRadius: cornerRadius)
-        var hitPath = basePath
-        if strokeWidth > 0 {
-            hitPath.addPath(basePath.strokedPath(.init(lineWidth: strokeWidth)))
-        }
-        return hitPath.contains(local)
-    }
-
-    var bounds: CGRect {
-        let scaledSize = CGSize(
-            width: size.width * abs(transform.scale.width),
-            height: size.height * abs(transform.scale.height)
-        )
-        return CGRect(origin: transform.position, size: scaledSize)
-    }
-}
-
-enum ResizeHandle: CaseIterable {
-    case topLeft, top, topRight
-    case left, right
-    case bottomLeft, bottom, bottomRight
-}
-
-struct ResizeHandleLayout {
-    static let handleSize: CGFloat = 8       // On-screen size at 100%
-    static let handleHitSize: CGFloat = 12   // On-screen hit target at 100%
-
-    // Keep handles a consistent on-screen size by scaling by inverse zoom
-    static func handleRects(for bounds: CGRect, zoomLevel: CGFloat) -> [ResizeHandle: CGRect] {
-        let w = bounds.width
-        let h = bounds.height
-        let hs = handleSize / zoomLevel
-
-        return [
-            .topLeft: CGRect(x: -hs / 2, y: -hs / 2, width: hs, height: hs),
-            .top: CGRect(x: w / 2 - hs / 2, y: -hs / 2, width: hs, height: hs),
-            .topRight: CGRect(x: w - hs / 2, y: -hs / 2, width: hs, height: hs),
-            .left: CGRect(x: -hs / 2, y: h / 2 - hs / 2, width: hs, height: hs),
-            .right: CGRect(x: w - hs / 2, y: h / 2 - hs / 2, width: hs, height: hs),
-            .bottomLeft: CGRect(x: -hs / 2, y: h - hs / 2, width: hs, height: hs),
-            .bottom: CGRect(x: w / 2 - hs / 2, y: h - hs / 2, width: hs, height: hs),
-            .bottomRight: CGRect(x: w - hs / 2, y: h - hs / 2, width: hs, height: hs)
-        ]
-    }
-}
-
 struct ZoomConfig {
     static let minZoom: CGFloat = 0.1   // 10%
     static let maxZoom: CGFloat = 5.0   // 500%
@@ -312,25 +138,60 @@ final class AnnotationCanvas: ObservableObject {
         annotations.filter { selectedAnnotationIDs.contains($0.id) }
     }
 
+    func annotationIndex(for id: UUID) -> Int? {
+        annotations.firstIndex(where: { $0.id == id })
+    }
+
+    func annotation(withID id: UUID) -> (any Annotation)? {
+        annotations.first(where: { $0.id == id })
+    }
+
     func selectionBoundingBox(for ids: Set<UUID>) -> CGRect? {
         let selected = annotations.compactMap { annotation -> CGRect? in
             guard ids.contains(annotation.id) else { return nil }
 
-            // Account for scale when calculating bounding box
-            let scaledSize = CGSize(
-                width: annotation.size.width * abs(annotation.transform.scale.width),
-                height: annotation.size.height * abs(annotation.transform.scale.height)
-            )
-
             // Note: This still doesn't account for rotation (which requires rotating the corners)
             // For now, we use the axis-aligned bounding box of the scaled shape
-            return CGRect(origin: annotation.transform.position, size: scaledSize)
+            return annotation.bounds
         }
 
         guard let first = selected.first else { return nil }
         return selected.dropFirst().reduce(first) { partialResult, rect in
             partialResult.union(rect)
         }
+    }
+
+    func controlPointHitTest(at canvasPoint: CGPoint) -> (UUID, ControlPointRole)? {
+        guard selectedAnnotationIDs.count == 1 else { return nil }
+        let hitSize = ResizeHandleLayout.handleHitSize / zoomLevel
+        let hitRadius = CGSize(width: hitSize, height: hitSize)
+
+        for id in selectedAnnotationIDs {
+            guard let annotation = annotation(withID: id) else { continue }
+            for control in annotation.controlPoints() {
+                let canvasPos = imageToCanvas(control.position)
+                let rect = CGRect(
+                    origin: CGPoint(x: canvasPos.x - hitRadius.width / 2, y: canvasPos.y - hitRadius.height / 2),
+                    size: hitRadius
+                )
+                if rect.contains(canvasPoint) {
+                    return (id, control.id)
+                }
+            }
+        }
+
+        return nil
+    }
+
+    func snapshot(for id: UUID) -> AnnotationSnapshot? {
+        guard let annotation = annotation(withID: id) else { return nil }
+        return AnnotationSnapshot.capture(annotation)
+    }
+
+    func applySnapshot(_ snapshot: AnnotationSnapshot, to id: UUID) {
+        guard let index = annotationIndex(for: id) else { return }
+        snapshot.apply(to: &annotations[index])
+        onAnnotationModified.send(id)
     }
 
     // MARK: - Annotation Lifecycle API

@@ -1,6 +1,6 @@
 # Canvas Architecture
 
-**Last Updated:** December 9, 2025
+**Last Updated:** December 10, 2025
 
 ## Overview
 
@@ -150,7 +150,63 @@ protocol CanvasCommand: AnyObject {
 
 ---
 
-### 5. AnnotationTool (Protocol)
+### 5. Annotation Protocol & Custom Selection
+
+**Responsibilities:**
+- Define annotation interface (geometry, transforms, control points)
+- Implement custom selection rendering per type
+- Support handle-based editing
+
+```swift
+protocol Annotation: AnyObject, Identifiable {
+    // Geometry
+    var id: UUID { get }
+    var transform: AnnotationTransform { get set }
+    var size: CGSize { get set }
+    var zIndex: Int { get set }
+    var bounds: CGRect { get }
+
+    // Hit testing
+    func contains(point: CGPoint) -> Bool
+
+    // Control points (draggable handles)
+    func controlPoints() -> [AnnotationControlPoint]
+    func moveControlPoint(_ id: ControlPointRole, to position: CGPoint)
+
+    // Selection rendering
+    func drawSelectionHandles(in context: inout GraphicsContext, canvas: AnnotationCanvas)
+}
+```
+
+**Implementations:**
+- `ShapeAnnotation` - 8 resize handles + outline
+- `LineAnnotation` - 2 endpoint handles + connecting line
+
+**Key Insight:** Protocol-based dispatch means **each annotation type controls its own selection UI**. New annotation types automatically define their selection behavior by implementing `drawSelectionHandles()`.
+
+**Selection Rendering Pattern:**
+
+```
+AnnotationCanvasView.drawSelectionHandles()
+    ↓
+For single selection:
+    annotation.drawSelectionHandles(in: &context, canvas: canvas)
+    ↓
+Each type renders custom UI:
+    - ShapeAnnotation: Draw outline + 8 square handles
+    - LineAnnotation: Draw line + 2 circular handles
+    - CustomAnnotation: Draw whatever makes sense for that type
+
+For multi-selection:
+    Draw shared bounding box outline only
+    (no individual type-specific handles)
+```
+
+**Architecture Role:** Annotation model + extensible selection UI
+
+---
+
+### 6. AnnotationTool (Protocol)
 
 **Responsibilities:**
 - Handle mouse events
@@ -175,7 +231,7 @@ protocol AnnotationTool: AnyObject {
 
 ---
 
-### 6. ToolRegistry (Singleton)
+### 7. ToolRegistry (Singleton)
 
 **Responsibilities:**
 - Register available tools
@@ -265,6 +321,26 @@ View Redraws Automatically
 8. Rectangle appears rotated on screen
 9. Command in undo stack (can be undone)
 ```
+
+### Example 4: Dragging a Line Endpoint (Control Point Editing)
+
+```
+1. User selects a line (circular endpoint handles appear)
+2. CanvasView calls annotation.drawSelectionHandles()
+3. LineAnnotation draws 2 circular handles at endpoints
+4. User drags the end handle
+5. SelectTool.onMouseDrag() detects control point hit (if implemented)
+6. Tool calls annotation.moveControlPoint(.lineEnd, to: newPos)
+7. LineAnnotation updates endPoint and recalculates bounds
+8. Canvas publishes onAnnotationModified event
+9. CanvasView redraws (live preview while dragging)
+10. User releases mouse
+11. SelectTool.onMouseUp() creates MoveControlPointCommand
+12. Command stored in undo stack
+13. Line is now at new angle/length
+```
+
+**Note:** Control point dragging infrastructure is in place but may not be fully integrated with SelectTool event handling yet. Single-selection with type-specific handle rendering is complete.
 
 ---
 

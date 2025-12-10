@@ -224,6 +224,8 @@ enum ToolIdentifier: String, CaseIterable {
         switch self {
         case .select:
             return ToolRegistry.shared.tool(withID: "select")
+        case .line:
+            return ToolRegistry.shared.tool(withID: "line")
         case .shape:
             return ToolRegistry.shared.tool(withID: "shape")
         default:
@@ -233,7 +235,9 @@ enum ToolIdentifier: String, CaseIterable {
 
     var behavior: Behavior {
         switch self {
-        case .line, .shape, .text, .note, .image:
+        case .line:
+            return .sticky  // Line tool stays active after completion
+        case .shape, .text, .note, .image:
             return .momentary
         default:
             return .sticky
@@ -261,9 +265,8 @@ struct LineProperties {
             width = width.clamped(to: ValidationConstants.strokeWidthRange)
         }
     }
-    var arrowStart: Bool = false
-    var arrowEnd: Bool = false
-    var arrowStyle: ArrowStyle = .open
+    var arrowStartType: ArrowType = .none
+    var arrowEndType: ArrowType = .open
     var arrowSize: Double = 10.0 {
         didSet {
             arrowSize = arrowSize.clamped(to: ValidationConstants.arrowSizeRange)
@@ -371,8 +374,12 @@ struct ImageProperties {
     var flipV: Bool = false
 }
 
-enum ArrowStyle: String, CaseIterable {
-    case open = "Open", filled = "Filled", diamond = "Diamond", circle = "Circle"
+enum ArrowType: String, CaseIterable {
+    case none = "None"
+    case open = "Open"
+    case filled = "Filled"
+    case diamond = "Diamond"
+    case circle = "Circle"
 }
 
 enum LineStyle: String, CaseIterable {
@@ -451,6 +458,13 @@ final class EditorViewModel: ObservableObject {
             }
             .store(in: &cancellables)
 
+        $line
+            .receive(on: RunLoop.main)
+            .sink { [weak self] lineProps in
+                self?.applyLineProperties(lineProps)
+            }
+            .store(in: &cancellables)
+
         // Activate the initial tool (didSet doesn't trigger during initialization)
         if let tool = selectedTool.createTool() {
             canvas.setActiveTool(tool)
@@ -458,6 +472,7 @@ final class EditorViewModel: ObservableObject {
 
         // Seed tool state with initial properties
         applyShapeProperties(shape)
+        applyLineProperties(line)
 
         // Listen for interaction end to auto-return to select for momentary tools
         canvas.onInteractionEnded
@@ -540,6 +555,20 @@ final class EditorViewModel: ObservableObject {
                 strokeWidth: CGFloat(shapeProps.strokeWidth),
                 cornerRadius: CGFloat(shapeProps.cornerRadius),
                 shapeKind: shapeProps.shape
+            )
+        }
+    }
+
+    private func applyLineProperties(_ lineProps: LineProperties) {
+        if let lineTool = ToolRegistry.shared.tool(withID: "line") as? LineTool {
+            lineTool.updateStyle(
+                stroke: lineProps.color,
+                strokeWidth: CGFloat(lineProps.width),
+                arrowStartType: lineProps.arrowStartType,
+                arrowEndType: lineProps.arrowEndType,
+                arrowSize: CGFloat(lineProps.arrowSize),
+                lineStyle: lineProps.lineStyle,
+                lineCap: lineProps.lineCap
             )
         }
     }
@@ -682,11 +711,15 @@ struct LinePropertiesView: View {
                 .labelsHidden()
             SliderWithLabel(label: "Width", value: $line.width, range: 0.5...20, step: 0.5)
             SliderWithLabel(label: "Arrow Size", value: $line.arrowSize, range: 5...30, step: 1)
-            Toggle("Start", isOn: $line.arrowStart).toggleStyle(.button).padding(.horizontal, UIConstants.presetButtonVerticalPadding)
-            Toggle("End", isOn: $line.arrowEnd).toggleStyle(.button).padding(.horizontal, UIConstants.presetButtonVerticalPadding)
-            Picker("Arrow Style", selection: $line.arrowStyle) {
-                ForEach(ArrowStyle.allCases, id: \.self) { style in
-                    Text(style.rawValue).tag(style)
+            Picker("Start Arrow", selection: $line.arrowStartType) {
+                ForEach(ArrowType.allCases, id: \.self) { type in
+                    Text(type.rawValue).tag(type)
+                }
+            }
+            .pickerStyle(.segmented)
+            Picker("End Arrow", selection: $line.arrowEndType) {
+                ForEach(ArrowType.allCases, id: \.self) { type in
+                    Text(type.rawValue).tag(type)
                 }
             }
             .pickerStyle(.segmented)

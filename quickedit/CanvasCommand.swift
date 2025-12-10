@@ -220,7 +220,7 @@ final class UpdatePropertiesCommand: CanvasCommand {
         if let zIndex = properties["zIndex"] as? Int {
             annotation.zIndex = zIndex
         }
-        if var shape = annotation as? ShapeAnnotation {
+        if let shape = annotation as? ShapeAnnotation {
             if let fill = properties["fill"] as? Color {
                 shape.fill = fill
             }
@@ -236,7 +236,6 @@ final class UpdatePropertiesCommand: CanvasCommand {
             if let cornerRadius = properties["cornerRadius"] as? CGFloat {
                 shape.cornerRadius = cornerRadius
             }
-            annotation = shape
         }
     }
 }
@@ -602,5 +601,38 @@ final class MoveAnnotationsCommand: CanvasCommand {
                 canvas.onAnnotationModified.send(canvas.annotations[i].id)
             }
         }
+    }
+}
+
+// MARK: - Move Control Point Command
+
+/// Command to move a single control point (endpoint or resize handle)
+final class MoveControlPointCommand: CanvasCommand {
+    let annotationID: UUID
+    let controlPointID: ControlPointRole
+    let newPosition: CGPoint   // Image-space position
+    private var snapshot: AnnotationSnapshot?
+
+    var actionName: String { "Adjust Handle" }
+
+    init(annotationID: UUID, controlPointID: ControlPointRole, newPosition: CGPoint) {
+        self.annotationID = annotationID
+        self.controlPointID = controlPointID
+        self.newPosition = newPosition
+    }
+
+    func execute(on canvas: AnnotationCanvas) {
+        guard let index = canvas.annotationIndex(for: annotationID) else { return }
+        if snapshot == nil {
+            snapshot = AnnotationSnapshot.capture(canvas.annotations[index])
+        }
+        canvas.annotations[index].moveControlPoint(controlPointID, to: newPosition)
+        canvas.onAnnotationModified.send(annotationID)
+    }
+
+    func undo(on canvas: AnnotationCanvas) {
+        guard let snapshot, let index = canvas.annotationIndex(for: annotationID) else { return }
+        snapshot.apply(to: &canvas.annotations[index])
+        canvas.onAnnotationModified.send(annotationID)
     }
 }

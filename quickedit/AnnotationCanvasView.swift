@@ -135,12 +135,86 @@ struct AnnotationCanvasView: View {
         }
     }
 
-    private func drawAnnotations(in context: inout GraphicsContext) {
+private func drawAnnotations(in context: inout GraphicsContext) {
         let sorted = canvas.annotations.sorted { $0.zIndex < $1.zIndex }
         for annotation in sorted where annotation.visible {
-            if let shapeAnnotation = annotation as? ShapeAnnotation {
+            if let lineAnnotation = annotation as? LineAnnotation {
+                drawLine(lineAnnotation, in: &context)
+            } else if let shapeAnnotation = annotation as? ShapeAnnotation {
                 drawShape(shapeAnnotation, in: &context)
             }
+        }
+    }
+
+    private func drawLine(_ annotation: LineAnnotation, in context: inout GraphicsContext) {
+        // Avoid rendering zero-length lines
+        guard annotation.size.width > 0 || annotation.size.height > 0 else { return }
+
+        let basePosition = canvas.imageToCanvas(annotation.transform.position)
+        let signedWidth = annotation.size.width * annotation.transform.scale.width * canvas.zoomLevel
+        let signedHeight = annotation.size.height * annotation.transform.scale.height * canvas.zoomLevel
+
+        let centerX = basePosition.x + (signedWidth / 2)
+        let centerY = basePosition.y + (signedHeight / 2)
+
+        let scaleXSign: CGFloat = annotation.transform.scale.width >= 0 ? 1 : -1
+        let scaleYSign: CGFloat = annotation.transform.scale.height >= 0 ? 1 : -1
+
+        let scaledSize = CGSize(width: abs(signedWidth), height: abs(signedHeight))
+
+        var contextCopy = context
+        contextCopy.translateBy(x: centerX, y: centerY)
+        contextCopy.rotate(by: annotation.transform.rotation)
+        contextCopy.scaleBy(x: scaleXSign, y: scaleYSign)
+        contextCopy.translateBy(x: -scaledSize.width / 2, y: -scaledSize.height / 2)
+
+        // Scale local coordinates into the drawing space
+        let widthScale = annotation.size.width == 0 ? 1 : scaledSize.width / annotation.size.width
+        let heightScale = annotation.size.height == 0 ? 1 : scaledSize.height / annotation.size.height
+
+        let start = CGPoint(
+            x: annotation.startPoint.x * widthScale,
+            y: annotation.startPoint.y * heightScale
+        )
+        let end = CGPoint(
+            x: annotation.endPoint.x * widthScale,
+            y: annotation.endPoint.y * heightScale
+        )
+
+        var path = Path()
+        path.move(to: start)
+        path.addLine(to: end)
+
+        let strokeStyle = StrokeStyle(
+            lineWidth: annotation.strokeWidth,
+            lineCap: annotation.lineCap.strokeCap,
+            lineJoin: .round,
+            dash: annotation.lineStyle.dashPattern(for: annotation.strokeWidth)
+        )
+        contextCopy.stroke(path, with: .color(annotation.stroke), style: strokeStyle)
+
+        let angle = atan2(end.y - start.y, end.x - start.x)
+        if annotation.arrowEndType != .none {
+            drawArrow(
+                at: end,
+                angle: angle,
+                size: annotation.arrowSize,
+                color: annotation.stroke,
+                style: annotation.arrowEndType,
+                lineWidth: annotation.strokeWidth,
+                in: &contextCopy
+            )
+        }
+        if annotation.arrowStartType != .none {
+            drawArrow(
+                at: start,
+                angle: angle + .pi,
+                size: annotation.arrowSize,
+                color: annotation.stroke,
+                style: annotation.arrowStartType,
+                lineWidth: annotation.strokeWidth,
+                in: &contextCopy
+            )
         }
     }
 
@@ -171,26 +245,23 @@ struct AnnotationCanvasView: View {
     }
 
     private func drawSelectionHandles(in context: inout GraphicsContext) {
-        guard let selectedBounds = canvas.selectionBoundingBox(for: canvas.selectedAnnotationIDs) else { return }
+        guard !canvas.selectedAnnotationIDs.isEmpty else { return }
 
-        // Convert to canvas space
+        if canvas.selectedAnnotationIDs.count == 1,
+           let id = canvas.selectedAnnotationIDs.first,
+           let annotation = canvas.annotation(withID: id) {
+            // Single selection: draw type-specific handles
+            annotation.drawSelectionHandles(in: &context, canvas: canvas)
+            return
+        }
+
+        // Multi-selection: draw outline only
+        guard let selectedBounds = canvas.selectionBoundingBox(for: canvas.selectedAnnotationIDs) else { return }
         let origin = canvas.imageToCanvas(selectedBounds.origin)
         let size = CGSize(width: selectedBounds.width * canvas.zoomLevel, height: selectedBounds.height * canvas.zoomLevel)
         let rect = CGRect(origin: origin, size: size)
-
-        // Draw selection outline
         let outline = Path(rect)
         context.stroke(outline, with: .color(Color.accentColor), lineWidth: 1)
-
-        // Draw handles at constant on-screen size
-        let handleRects = ResizeHandleLayout.handleRects(for: CGRect(origin: .zero, size: rect.size), zoomLevel: canvas.zoomLevel)
-        for (_, handle) in handleRects {
-            var handleRect = handle
-            handleRect.origin.x += rect.origin.x
-            handleRect.origin.y += rect.origin.y
-            context.fill(Path(handleRect), with: .color(.white))
-            context.stroke(Path(handleRect), with: .color(.accentColor))
-        }
     }
 
     private func drawGrid(in context: inout GraphicsContext, size: CGSize) {
@@ -219,6 +290,80 @@ struct AnnotationCanvasView: View {
 
 private extension CGSize {
     var center: CGPoint { CGPoint(x: width / 2, y: height / 2) }
+}
+
+// MARK: - Line Helpers
+
+extension LineStyle {
+    func dashPattern(for lineWidth: CGFloat) -> [CGFloat] {
+        switch self {
+        case .solid:
+            return []
+        case .dashed:
+            return [lineWidth * 4, lineWidth * 2]
+        case .dotted:
+            return [lineWidth, lineWidth * 1.5]
+        }
+    }
+}
+
+extension LineCap {
+    var strokeCap: CGLineCap {
+        switch self {
+        case .butt: return .butt
+        case .round: return .round
+        case .square: return .square
+        }
+    }
+}
+
+private func drawArrow(
+    at point: CGPoint,
+    angle: CGFloat,
+    size: CGFloat,
+    color: Color,
+    style: ArrowType,
+    lineWidth: CGFloat,
+    in context: inout GraphicsContext
+) {
+    guard size > 0 else { return }
+
+    var arrowContext = context
+    arrowContext.translateBy(x: point.x, y: point.y)
+    arrowContext.rotate(by: Angle(radians: Double(angle)))
+
+    let length = size
+    let halfWidth = size * 0.4
+
+    switch style {
+    case .none:
+        return  // Safety: shouldn't be called with .none
+    case .open:
+        var path = Path()
+        path.move(to: CGPoint(x: -length, y: -halfWidth))
+        path.addLine(to: .zero)
+        path.addLine(to: CGPoint(x: -length, y: halfWidth))
+        arrowContext.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+    case .filled:
+        var path = Path()
+        path.move(to: .zero)
+        path.addLine(to: CGPoint(x: -length, y: -halfWidth))
+        path.addLine(to: CGPoint(x: -length, y: halfWidth))
+        path.closeSubpath()
+        arrowContext.fill(path, with: .color(color))
+    case .diamond:
+        var path = Path()
+        path.move(to: .zero)
+        path.addLine(to: CGPoint(x: -length / 2, y: -halfWidth))
+        path.addLine(to: CGPoint(x: -length, y: 0))
+        path.addLine(to: CGPoint(x: -length / 2, y: halfWidth))
+        path.closeSubpath()
+        arrowContext.fill(path, with: .color(color))
+    case .circle:
+        let diameter = size
+        let rect = CGRect(x: -diameter, y: -diameter / 2, width: diameter, height: diameter)
+        arrowContext.fill(Path(ellipseIn: rect), with: .color(color))
+    }
 }
 
 // MARK: - Scroll Wheel Support

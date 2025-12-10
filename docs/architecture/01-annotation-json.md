@@ -1,6 +1,6 @@
 # Annotation JSON Structure
 
-**Last Updated:** December 9, 2025
+**Last Updated:** December 12, 2025
 
 ## Overview
 
@@ -38,7 +38,7 @@ All annotations share these common properties:
 | `visible` | Boolean | Visibility state |
 | `locked` | Boolean | Prevents editing if true |
 | `transform` | Object | Position, scale, rotation |
-| `size` | Object | Width and height in image space |
+| `size` | Object | Width and height in image space (axis-aligned bounds) |
 
 ### Transform Object
 
@@ -57,14 +57,12 @@ All annotations share these common properties:
 
 ---
 
-## Rectangle Annotation
-
-**Current Implementation:** ✅
+## Shape Annotation (rectangle, rounded, ellipse, diamond, triangle)
 
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
-  "type": "rectangle",
+  "type": "shape",
   "zIndex": 1,
   "visible": true,
   "locked": false,
@@ -75,19 +73,23 @@ All annotations share these common properties:
   },
   "size": { "width": 200.0, "height": 150.0 },
   "fill": { "r": 0.0, "g": 0.5, "b": 1.0, "a": 0.3 },
-  "stroke": { "r": 0.0, "g": 0.5, "b": 1.0, "a": 1.0 }
+  "stroke": { "r": 0.0, "g": 0.5, "b": 1.0, "a": 1.0 },
+  "strokeWidth": 2.0,
+  "shapeKind": "rectangle",
+  "cornerRadius": 0.0
 }
 ```
 
 **Type-specific properties:**
 - `fill` - Fill color (RGBA, 0.0-1.0 normalized)
 - `stroke` - Stroke color (RGBA, 0.0-1.0 normalized)
+- `strokeWidth` - Stroke thickness in image units
+- `shapeKind` - `rectangle|rounded|ellipse|diamond|triangle`
+- `cornerRadius` - Corner radius for rectangle/rounded
 
 ---
 
-## Future Annotation Types
-
-### Line Annotation
+## Line Annotation
 
 ```json
 {
@@ -96,10 +98,23 @@ All annotations share these common properties:
   "endPoint": { "x": 100.0, "y": 100.0 },
   "stroke": { "r": 0.0, "g": 0.0, "b": 0.0, "a": 1.0 },
   "strokeWidth": 2.0,
-  "arrowStart": false,
-  "arrowEnd": false
+  "arrowStartType": "none",
+  "arrowEndType": "open",
+  "arrowSize": 10.0,
+  "lineStyle": "solid",
+  "lineCap": "round"
 }
 ```
+
+**Type-specific properties:**
+- `startPoint`, `endPoint` - Points relative to `transform.position` within the `size` bounds
+- `stroke`, `strokeWidth` - Line appearance
+- `arrowStartType`, `arrowEndType` - `none|open|filled|diamond|circle`
+- `arrowSize` - Arrowhead length/width
+- `lineStyle` - `solid|dashed|dotted`
+- `lineCap` - `butt|round|square`
+
+**Selection behavior:** shows two endpoint handles (no bounding box handles).
 
 ### Text Annotation
 

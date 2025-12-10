@@ -67,9 +67,21 @@ final class SelectTool: AnnotationTool {
     private var isDraggingAnnotations: Bool = false
     private var initialPanOffset: CGPoint?
     private var originalPositions: [UUID: CGPoint] = [:]  // Track original positions for live preview
+    private var activeControlPoint: (annotationID: UUID, controlID: ControlPointRole)?
+    private var controlPointSnapshots: [UUID: AnnotationSnapshot] = [:]
 
     func onMouseDown(at point: CGPoint, on canvas: AnnotationCanvas) {
         dragStartPoint = point
+
+        // First check if user grabbed a visible control point on selected annotations
+        if let hit = canvas.controlPointHitTest(at: point) {
+            activeControlPoint = hit
+            if controlPointSnapshots[hit.0] == nil {
+                controlPointSnapshots[hit.0] = canvas.snapshot(for: hit.0)
+            }
+            canvas.onInteractionBegan.send("adjusting_handle")
+            return
+        }
 
         // Hit test to find annotation at point (point is in canvas space)
         if let hit = canvas.annotation(at: point) {
@@ -95,6 +107,16 @@ final class SelectTool: AnnotationTool {
     }
 
     func onMouseDrag(to point: CGPoint, on canvas: AnnotationCanvas) {
+        if let activeHandle = activeControlPoint {
+            let imagePoint = canvas.canvasToImage(point)
+            let target = canvas.snapToGrid ? canvas.snapToGrid(imagePoint, gridSize: canvas.gridSize) : imagePoint
+            if let index = canvas.annotationIndex(for: activeHandle.annotationID) {
+                canvas.annotations[index].moveControlPoint(activeHandle.controlID, to: target)
+                canvas.onAnnotationModified.send(activeHandle.annotationID)
+            }
+            return
+        }
+
         guard let startPoint = dragStartPoint else { return }
 
         if isDraggingAnnotations {
@@ -131,6 +153,37 @@ final class SelectTool: AnnotationTool {
     }
 
     func onMouseUp(at point: CGPoint, on canvas: AnnotationCanvas) {
+        defer {
+            dragStartPoint = nil
+            isDraggingAnnotations = false
+            initialPanOffset = nil
+            originalPositions.removeAll()
+            if activeControlPoint == nil {
+                controlPointSnapshots.removeAll()
+            }
+        }
+
+        if let activeHandle = activeControlPoint {
+            let imagePoint = canvas.canvasToImage(point)
+            let target = canvas.snapToGrid ? canvas.snapToGrid(imagePoint, gridSize: canvas.gridSize) : imagePoint
+
+            // Restore original state before issuing command for correct undo/redo
+            if let snapshot = controlPointSnapshots[activeHandle.annotationID] {
+                canvas.applySnapshot(snapshot, to: activeHandle.annotationID)
+            }
+
+            let command = MoveControlPointCommand(
+                annotationID: activeHandle.annotationID,
+                controlPointID: activeHandle.controlID,
+                newPosition: target
+            )
+            canvas.execute(command)
+            canvas.onInteractionEnded.send("adjusting_handle")
+
+            activeControlPoint = nil
+            return
+        }
+
         if isDraggingAnnotations {
             // Calculate final delta in image space
             guard let startPoint = dragStartPoint else { return }
@@ -171,12 +224,6 @@ final class SelectTool: AnnotationTool {
                 canvas.moveAnnotations(canvas.selectedAnnotationIDs, by: delta)
             }
         }
-
-        // Clean up state
-        dragStartPoint = nil
-        isDraggingAnnotations = false
-        initialPanOffset = nil
-        originalPositions.removeAll()
     }
 
     func deactivate() {
@@ -185,6 +232,8 @@ final class SelectTool: AnnotationTool {
         isDraggingAnnotations = false
         initialPanOffset = nil
         originalPositions.removeAll()
+        activeControlPoint = nil
+        controlPointSnapshots.removeAll()
     }
 }
 
@@ -320,6 +369,204 @@ final class ShapeTool: AnnotationTool {
     }
 }
 
+// MARK: - Line Tool
+
+/// Tool for drawing straight lines with optional arrow heads
+final class LineTool: AnnotationTool {
+    let id = "line"
+    let name = "Line"
+    let iconName = "line.diagonal"
+
+    private var startPoint: CGPoint?
+    private var currentPoint: CGPoint?
+
+    // Styling
+    private var strokeColor: Color = .black
+    private var strokeWidth: CGFloat = 2.5
+    private var arrowStartType: ArrowType = .none
+    private var arrowEndType: ArrowType = .open
+    private var arrowSize: CGFloat = 10
+    private var lineStyle: LineStyle = .solid
+    private var lineCap: LineCap = .round
+
+    func updateStyle(
+        stroke: Color,
+        strokeWidth: CGFloat,
+        arrowStartType: ArrowType,
+        arrowEndType: ArrowType,
+        arrowSize: CGFloat,
+        lineStyle: LineStyle,
+        lineCap: LineCap
+    ) {
+        self.strokeColor = stroke
+        self.strokeWidth = strokeWidth
+        self.arrowStartType = arrowStartType
+        self.arrowEndType = arrowEndType
+        self.arrowSize = arrowSize
+        self.lineStyle = lineStyle
+        self.lineCap = lineCap
+    }
+
+    func onMouseDown(at point: CGPoint, on canvas: AnnotationCanvas) {
+        let imagePoint = canvas.canvasToImage(point)
+        startPoint = imagePoint
+        currentPoint = imagePoint
+        canvas.onInteractionBegan.send("drawing_line")
+    }
+
+    func onMouseDrag(to point: CGPoint, on canvas: AnnotationCanvas) {
+        let imagePoint = canvas.canvasToImage(point)
+        currentPoint = imagePoint
+    }
+
+    func onMouseUp(at point: CGPoint, on canvas: AnnotationCanvas) {
+        guard let start = startPoint else { return }
+        let imagePoint = canvas.canvasToImage(point)
+
+        let dx = imagePoint.x - start.x
+        let dy = imagePoint.y - start.y
+        let distance = hypot(dx, dy)
+
+        // Ignore clicks without movement
+        guard distance > 0.5 else {
+            resetState(on: canvas)
+            return
+        }
+
+        let minX = min(start.x, imagePoint.x)
+        let minY = min(start.y, imagePoint.y)
+        let width = abs(dx)
+        let height = abs(dy)
+        let safeWidth = max(width, 0.1)   // Avoid zero-sized bounds for selection handles
+        let safeHeight = max(height, 0.1)
+
+        var startLocal = CGPoint(x: start.x - minX, y: start.y - minY)
+        var endLocal = CGPoint(x: imagePoint.x - minX, y: imagePoint.y - minY)
+
+        if width == 0 {
+            startLocal.x = safeWidth / 2
+            endLocal.x = safeWidth / 2
+        }
+
+        if height == 0 {
+            startLocal.y = safeHeight / 2
+            endLocal.y = safeHeight / 2
+        }
+
+        let line = LineAnnotation(
+            zIndex: (canvas.annotations.map(\.zIndex).max() ?? 0) + 1,
+            transform: AnnotationTransform(
+                position: CGPoint(x: minX, y: minY),
+                scale: CGSize(width: 1, height: 1),
+                rotation: .zero
+            ),
+            size: CGSize(width: safeWidth, height: safeHeight),
+            startPoint: startLocal,
+            endPoint: endLocal,
+            stroke: strokeColor,
+            strokeWidth: strokeWidth,
+            arrowStartType: arrowStartType,
+            arrowEndType: arrowEndType,
+            arrowSize: arrowSize,
+            lineStyle: lineStyle,
+            lineCap: lineCap
+        )
+
+        canvas.addAnnotation(line)
+        resetState(on: canvas)
+    }
+
+    func renderPreview(in context: inout GraphicsContext, canvas: AnnotationCanvas) {
+        guard let start = startPoint, let current = currentPoint else { return }
+
+        let startCanvas = canvas.imageToCanvas(start)
+        let endCanvas = canvas.imageToCanvas(current)
+
+        var path = Path()
+        path.move(to: startCanvas)
+        path.addLine(to: endCanvas)
+
+        let strokeStyle = StrokeStyle(
+            lineWidth: strokeWidth,
+            lineCap: lineCap.strokeCap,
+            lineJoin: .round,
+            dash: lineStyle.dashPattern(for: strokeWidth)
+        )
+
+        context.stroke(path, with: .color(strokeColor), style: strokeStyle)
+
+        let angle = atan2(endCanvas.y - startCanvas.y, endCanvas.x - startCanvas.x)
+        if arrowEndType != .none {
+            drawPreviewArrow(
+                at: endCanvas,
+                angle: angle,
+                style: arrowEndType,
+                in: &context
+            )
+        }
+        if arrowStartType != .none {
+            drawPreviewArrow(
+                at: startCanvas,
+                angle: angle + .pi,
+                style: arrowStartType,
+                in: &context
+            )
+        }
+    }
+
+    func deactivate() {
+        startPoint = nil
+        currentPoint = nil
+    }
+
+    private func resetState(on canvas: AnnotationCanvas) {
+        startPoint = nil
+        currentPoint = nil
+        canvas.onInteractionEnded.send("drawing_line")
+    }
+
+    private func drawPreviewArrow(at point: CGPoint, angle: CGFloat, style: ArrowType, in context: inout GraphicsContext) {
+        guard arrowSize > 0 else { return }
+
+        var arrowContext = context
+        arrowContext.translateBy(x: point.x, y: point.y)
+        arrowContext.rotate(by: Angle(radians: Double(angle)))
+
+        let length = arrowSize
+        let halfWidth = arrowSize * 0.4
+
+        switch style {
+        case .none:
+            return  // Should not be called with .none
+        case .open:
+            var path = Path()
+            path.move(to: CGPoint(x: -length, y: -halfWidth))
+            path.addLine(to: .zero)
+            path.addLine(to: CGPoint(x: -length, y: halfWidth))
+            arrowContext.stroke(path, with: .color(strokeColor), style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round))
+        case .filled:
+            var path = Path()
+            path.move(to: .zero)
+            path.addLine(to: CGPoint(x: -length, y: -halfWidth))
+            path.addLine(to: CGPoint(x: -length, y: halfWidth))
+            path.closeSubpath()
+            arrowContext.fill(path, with: .color(strokeColor))
+        case .diamond:
+            var path = Path()
+            path.move(to: .zero)
+            path.addLine(to: CGPoint(x: -length / 2, y: -halfWidth))
+            path.addLine(to: CGPoint(x: -length, y: 0))
+            path.addLine(to: CGPoint(x: -length / 2, y: halfWidth))
+            path.closeSubpath()
+            arrowContext.fill(path, with: .color(strokeColor))
+        case .circle:
+            let diameter = arrowSize
+            let rect = CGRect(x: -diameter, y: -diameter / 2, width: diameter, height: diameter)
+            arrowContext.fill(Path(ellipseIn: rect), with: .color(strokeColor))
+        }
+    }
+}
+
 // MARK: - Tool Registry
 
 /// Singleton registry for managing available annotation tools
@@ -332,6 +579,7 @@ final class ToolRegistry {
         // Register built-in tools
         register(SelectTool())
         register(ShapeTool())
+        register(LineTool())
     }
 
     /// Register a tool with the registry
