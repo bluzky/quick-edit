@@ -1,10 +1,10 @@
 # Canvas API Reference
 
-**Last Updated:** December 9, 2025
+**Last Updated:** December 10, 2025
 
 ## Overview
 
-The `AnnotationCanvas` class provides a complete API for managing annotations with full undo/redo support, transform operations, and event publishing.
+The `AnnotationCanvas` class provides a complete API for managing annotations with full undo/redo support, transform operations, and event publishing. The canvas renders against the `Annotation` model layer (`AnnotationModel.swift`) and treats annotations as the source of truth (no canvas-owned geometry).
 
 **Key Principles:**
 - All mutations go through the command pattern (undoable)
@@ -26,7 +26,7 @@ Creates a new annotation with undo support.
 
 **Example:**
 ```swift
-let rect = RectangleAnnotation(
+let rect = ShapeAnnotation(
     zIndex: canvas.annotations.count,
     transform: AnnotationTransform(
         position: CGPoint(x: 100, y: 100),
@@ -35,7 +35,10 @@ let rect = RectangleAnnotation(
     ),
     size: CGSize(width: 200, height: 150),
     fill: .blue.opacity(0.3),
-    stroke: .blue
+    stroke: .blue,
+    strokeWidth: 2,
+    shapeKind: .rectangle,
+    cornerRadius: 0
 )
 canvas.addAnnotation(rect)  // Undoable
 ```
@@ -104,6 +107,8 @@ Update multiple properties in a single undoable operation.
 - `"visible"` - Bool
 - `"locked"` - Bool
 - `"zIndex"` - Int
+- Shape: `"fill"` (Color), `"stroke"` (Color), `"strokeWidth"` (CGFloat), `"shapeKind"` (ShapeKind), `"cornerRadius"` (CGFloat)
+- Line: `"startPoint"` (CGPoint), `"endPoint"` (CGPoint), `"stroke"` (Color), `"strokeWidth"` (CGFloat), `"arrowStartType"` (ArrowType), `"arrowEndType"` (ArrowType), `"arrowSize"` (CGFloat), `"lineStyle"` (LineStyle), `"lineCap"` (LineCap)
 
 **Example:**
 ```swift
@@ -200,6 +205,34 @@ canvas.rotate90()         // Rotate selected 90° clockwise
 canvas.flipHorizontal()   // Mirror selected horizontally
 ```
 
+### Move
+
+```swift
+func moveAnnotations(_ ids: Set<UUID>, by delta: CGPoint)
+func execute(_ command: CanvasCommand)
+```
+
+Move annotations by a delta offset in image space.
+
+**Example:**
+```swift
+// Move selected annotations by 10 pixels right, 5 down
+canvas.moveAnnotations(canvas.selectedAnnotationIDs, by: CGPoint(x: 10, y: 5))
+
+// Undo to return to original position
+canvas.undo()
+
+// Commit a handle move
+let cmd = MoveControlPointCommand(
+    annotationID: id,
+    controlPointID: .lineEnd,
+    newPosition: CGPoint(x: 120, y: 240)
+)
+canvas.execute(cmd)
+```
+
+**Note:** Delta is in image space (zoom-independent). SelectTool uses this for drag-to-move functionality with live preview.
+
 ---
 
 ## Selection API
@@ -236,6 +269,8 @@ canvas.$selectedAnnotationIDs.sink { ids in
 ```swift
 func annotation(at canvasPoint: CGPoint) -> (any Annotation)?
 func selectionBoundingBox(for ids: Set<UUID>) -> CGRect?
+func controlPointHitTest(at canvasPoint: CGPoint) -> (UUID, ControlPointRole)?
+func annotation(withID id: UUID) -> (any Annotation)?
 ```
 
 **Example:**
@@ -245,6 +280,11 @@ if let hit = canvas.annotation(at: tapLocation) {
     canvas.toggleSelection(for: hit.id)
 }
 
+// Handle hit (single-select)
+if let (id, handle) = canvas.controlPointHitTest(at: cursor) {
+    print("Hit handle \(handle) on \(id)")
+}
+
 // Get bounds of selection
 if let bounds = canvas.selectionBoundingBox(for: canvas.selectedAnnotationIDs) {
     // Draw selection handles
@@ -252,6 +292,92 @@ if let bounds = canvas.selectionBoundingBox(for: canvas.selectedAnnotationIDs) {
 ```
 
 **Note:** Point is in **canvas space** (screen coordinates). The method handles conversion to image space internally.
+
+---
+
+## Control Points & Selection Rendering
+
+### Control Point Protocol
+
+Each annotation type defines its own control points (draggable handles) for editing:
+
+```swift
+protocol Annotation {
+    /// Returns the control points for this annotation.
+    /// Lines have 2 points (start/end), shapes have 8 (corners/edges).
+    func controlPoints() -> [AnnotationControlPoint]
+
+    /// Move a control point to a new position (image space).
+    /// The annotation updates its geometry accordingly.
+    func moveControlPoint(_ id: ControlPointRole, to position: CGPoint)
+
+    /// Draw custom selection handles for this annotation type.
+    /// Each type renders its own selection UI.
+    func drawSelectionHandles(in context: inout GraphicsContext, canvas: AnnotationCanvas)
+}
+```
+
+### Control Point Types
+
+```swift
+enum ControlPointRole: Hashable {
+    case corner(ResizeHandle)        // Shape corners
+    case edge(ResizeHandle)           // Shape edges
+    case lineStart                    // Line start point
+    case lineEnd                      // Line end point
+    case center                       // Future: rotation center
+}
+
+enum ResizeHandle: CaseIterable {
+    case topLeft, top, topRight
+    case left, right
+    case bottomLeft, bottom, bottomRight
+}
+```
+
+### Selection Rendering
+
+**LineAnnotation:**
+- Displays 2 circular handles at start/end points
+- Draws blue line connecting the points
+- Handles are 8pt diameter, zoom-independent
+- Draggable for live editing
+
+**ShapeAnnotation:**
+- Displays 8 square resize handles (corners + edges)
+- Draws blue outline around bounding box
+- Handles are 8pt size, zoom-independent
+- Draggable for resizing
+
+**Multi-Selection:**
+- ❌ **Not yet implemented** - Shift+click to add/remove from selection
+- Single-selection only (click selects one, deselects others)
+- Future: Will show bounding box outline only (no individual handles)
+
+### Example: Custom Annotation Type
+
+To add a custom annotation with unique selection behavior:
+
+```swift
+final class CustomAnnotation: Annotation {
+    // ... required properties ...
+
+    func controlPoints() -> [AnnotationControlPoint] {
+        // Return your custom control points
+        return [/* ... */]
+    }
+
+    func moveControlPoint(_ id: ControlPointRole, to position: CGPoint) {
+        // Update your geometry when a control point moves
+    }
+
+    func drawSelectionHandles(in context: inout GraphicsContext, canvas: AnnotationCanvas) {
+        // Draw your custom selection UI
+        // Example: Bezier curve with 4 control points
+        // Example: Polygon with N vertices
+    }
+}
+```
 
 ---
 
@@ -441,4 +567,4 @@ canvas.addAnnotation(rect)
 
 - Annotation JSON: `01-annotation-json.md`
 - Tool Protocol: `03-tool-protocol.md`
-- Architecture: `04-canvas-architecture.md`
+- Architecture: `README.md`

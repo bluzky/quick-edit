@@ -54,6 +54,7 @@ private enum ValidationConstants {
 
     // Shape validation
     static let shapeStrokeWidthRange: ClosedRange<Double> = 0...50
+    static let shapeCornerRadiusRange: ClosedRange<Double> = 0...200
 
     // Text validation
     static let fontSizeRange: ClosedRange<Double> = 6...144
@@ -183,6 +184,11 @@ enum FontChoice: String, CaseIterable, Codable {
 enum ToolIdentifier: String, CaseIterable {
     case select, freehand, highlight, blur, line, shape, text, number, image, note
 
+    enum Behavior {
+        case sticky   // stays active after use
+        case momentary // returns to select after completion
+    }
+
     var label: String {
         switch self {
         case .select: return "Select"
@@ -218,10 +224,23 @@ enum ToolIdentifier: String, CaseIterable {
         switch self {
         case .select:
             return ToolRegistry.shared.tool(withID: "select")
+        case .line:
+            return ToolRegistry.shared.tool(withID: "line")
         case .shape:
-            return ToolRegistry.shared.tool(withID: "rectangle")
+            return ToolRegistry.shared.tool(withID: "shape")
         default:
             return nil  // TODO: Implement other tools
+        }
+    }
+
+    var behavior: Behavior {
+        switch self {
+        case .line:
+            return .sticky  // Line tool stays active after completion
+        case .shape, .text, .note, .image:
+            return .momentary
+        default:
+            return .sticky
         }
     }
 }
@@ -246,9 +265,8 @@ struct LineProperties {
             width = width.clamped(to: ValidationConstants.strokeWidthRange)
         }
     }
-    var arrowStart: Bool = false
-    var arrowEnd: Bool = false
-    var arrowStyle: ArrowStyle = .open
+    var arrowStartType: ArrowType = .none
+    var arrowEndType: ArrowType = .open
     var arrowSize: Double = 10.0 {
         didSet {
             arrowSize = arrowSize.clamped(to: ValidationConstants.arrowSizeRange)
@@ -267,6 +285,23 @@ struct ShapeProperties {
             strokeWidth = strokeWidth.clamped(to: ValidationConstants.shapeStrokeWidthRange)
         }
     }
+    var cornerRadius: Double = 10 {
+        didSet {
+            cornerRadius = cornerRadius.clamped(to: ValidationConstants.shapeCornerRadiusRange)
+        }
+    }
+
+    // Text properties
+    var text: String = ""
+    var textColor: Color = .black
+    var font: FontChoice = .system
+    var fontSize: Double = 16 {
+        didSet {
+            fontSize = fontSize.clamped(to: ValidationConstants.fontSizeRange)
+        }
+    }
+    var horizontalAlignment: TextAlignmentChoice = .center
+    var verticalAlignment: ShapeVerticalAlignment = .middle
 }
 
 struct TextProperties {
@@ -351,8 +386,12 @@ struct ImageProperties {
     var flipV: Bool = false
 }
 
-enum ArrowStyle: String, CaseIterable {
-    case open = "Open", filled = "Filled", diamond = "Diamond", circle = "Circle"
+enum ArrowType: String, CaseIterable {
+    case none = "None"
+    case open = "Open"
+    case filled = "Filled"
+    case diamond = "Diamond"
+    case circle = "Circle"
 }
 
 enum LineStyle: String, CaseIterable {
@@ -363,12 +402,12 @@ enum LineCap: String, CaseIterable {
     case butt = "Butt", round = "Round", square = "Square"
 }
 
-enum ShapeKind: String, CaseIterable {
-    case rectangle = "Rectangle", circle = "Circle", ellipse = "Ellipse", triangle = "Triangle"
-}
-
 enum TextAlignmentChoice: String, CaseIterable {
     case left = "Left", center = "Center", right = "Right", justify = "Justify"
+}
+
+enum ShapeVerticalAlignment: String, CaseIterable {
+    case top = "Top", middle = "Middle", bottom = "Bottom"
 }
 
 enum NumberShapeStyle: String, CaseIterable {
@@ -388,6 +427,7 @@ final class EditorViewModel: ObservableObject {
                 canvas.setActiveTool(nil)
             }
             syncColorFromTool()
+            shouldReturnToSelect = (selectedTool.behavior == .momentary)
         }
     }
     @Published var selectedColor: Color = Color.accentColor
@@ -403,6 +443,7 @@ final class EditorViewModel: ObservableObject {
     @Published var image = ImageProperties()
 
     private var cancellables = Set<AnyCancellable>()
+    private var shouldReturnToSelect = false
 
     init(canvas: AnnotationCanvas) {
         self.canvas = canvas
@@ -425,10 +466,41 @@ final class EditorViewModel: ObservableObject {
             }
             .store(in: &cancellables)
 
+        // Keep ShapeTool in sync with UI properties
+        $shape
+            .receive(on: RunLoop.main)
+            .sink { [weak self] shapeProps in
+                self?.applyShapeProperties(shapeProps)
+            }
+            .store(in: &cancellables)
+
+        $line
+            .receive(on: RunLoop.main)
+            .sink { [weak self] lineProps in
+                self?.applyLineProperties(lineProps)
+            }
+            .store(in: &cancellables)
+
         // Activate the initial tool (didSet doesn't trigger during initialization)
         if let tool = selectedTool.createTool() {
             canvas.setActiveTool(tool)
         }
+
+        // Seed tool state with initial properties
+        applyShapeProperties(shape)
+        applyLineProperties(line)
+
+        // Listen for interaction end to auto-return to select for momentary tools
+        canvas.onInteractionEnded
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                if self.shouldReturnToSelect {
+                    self.selectedTool = .select
+                    self.shouldReturnToSelect = false
+                }
+            }
+            .store(in: &cancellables)
     }
 
     func resetNumberCounter() {
@@ -490,6 +562,62 @@ final class EditorViewModel: ObservableObject {
             break
         }
     }
+
+    private func applyShapeProperties(_ shapeProps: ShapeProperties) {
+        if let shapeTool = ToolRegistry.shared.tool(withID: "shape") as? ShapeTool {
+            // Convert UI enums to model enums
+            let horizontalAlignment: HorizontalTextAlignment = {
+                switch shapeProps.horizontalAlignment {
+                case .left: return .left
+                case .center: return .center
+                case .right: return .right
+                case .justify: return .center  // Fallback to center for justify
+                }
+            }()
+
+            let verticalAlignment: VerticalTextAlignment = {
+                switch shapeProps.verticalAlignment {
+                case .top: return .top
+                case .middle: return .middle
+                case .bottom: return .bottom
+                }
+            }()
+
+            shapeTool.updateStyle(
+                fill: shapeProps.fillColor,
+                stroke: shapeProps.strokeColor,
+                strokeWidth: CGFloat(shapeProps.strokeWidth),
+                cornerRadius: CGFloat(shapeProps.cornerRadius),
+                shapeKind: shapeProps.shape,
+                text: shapeProps.text,
+                textColor: shapeProps.textColor,
+                fontFamily: shapeProps.font.rawValue,
+                fontSize: CGFloat(shapeProps.fontSize),
+                horizontalAlignment: horizontalAlignment,
+                verticalAlignment: verticalAlignment
+            )
+        }
+    }
+
+    private func applyLineProperties(_ lineProps: LineProperties) {
+        if let lineTool = ToolRegistry.shared.tool(withID: "line") as? LineTool {
+            lineTool.updateStyle(
+                stroke: lineProps.color,
+                strokeWidth: CGFloat(lineProps.width),
+                arrowStartType: lineProps.arrowStartType,
+                arrowEndType: lineProps.arrowEndType,
+                arrowSize: CGFloat(lineProps.arrowSize),
+                lineStyle: lineProps.lineStyle,
+                lineCap: lineProps.lineCap
+            )
+        }
+    }
+
+    // Called from UI when a tool is activated
+    func activateTool(_ tool: ToolIdentifier) {
+        shouldReturnToSelect = (tool.behavior == .momentary)
+        selectedTool = tool
+    }
 }
 
 struct ContentView: View {
@@ -511,6 +639,7 @@ struct ContentView: View {
             MainToolbar(
                 canvas: canvas,
                 selectedTool: $viewModel.selectedTool,
+                onSelectTool: { tool in viewModel.activateTool(tool) },
                 onColor: { showingColorSheet = true },
                 onUndo: { canvas.undo() },
                 onRedo: { canvas.redo() },
@@ -533,7 +662,10 @@ struct ContentView: View {
         }
         .onChange(of: canvas.snapToGrid) { _, isOn in
             if isOn {
-                canvas.applyGridSnapping(enabled: true, gridSize: canvas.gridSize)
+                // Defer to avoid publishing changes during view updates
+                DispatchQueue.main.async {
+                    canvas.applyGridSnapping(enabled: true, gridSize: canvas.gridSize)
+                }
             }
         }
     }
@@ -619,11 +751,15 @@ struct LinePropertiesView: View {
                 .labelsHidden()
             SliderWithLabel(label: "Width", value: $line.width, range: 0.5...20, step: 0.5)
             SliderWithLabel(label: "Arrow Size", value: $line.arrowSize, range: 5...30, step: 1)
-            Toggle("Start", isOn: $line.arrowStart).toggleStyle(.button).padding(.horizontal, UIConstants.presetButtonVerticalPadding)
-            Toggle("End", isOn: $line.arrowEnd).toggleStyle(.button).padding(.horizontal, UIConstants.presetButtonVerticalPadding)
-            Picker("Arrow Style", selection: $line.arrowStyle) {
-                ForEach(ArrowStyle.allCases, id: \.self) { style in
-                    Text(style.rawValue).tag(style)
+            Picker("Start Arrow", selection: $line.arrowStartType) {
+                ForEach(ArrowType.allCases, id: \.self) { type in
+                    Text(type.rawValue).tag(type)
+                }
+            }
+            .pickerStyle(.segmented)
+            Picker("End Arrow", selection: $line.arrowEndType) {
+                ForEach(ArrowType.allCases, id: \.self) { type in
+                    Text(type.rawValue).tag(type)
                 }
             }
             .pickerStyle(.segmented)
@@ -647,18 +783,62 @@ struct ShapePropertiesView: View {
     @Binding var shape: ShapeProperties
 
     var body: some View {
-        HStack(spacing: UIConstants.propertiesSpacing) {
-            Picker("Shape", selection: $shape.shape) {
-                ForEach(ShapeKind.allCases, id: \.self) { shape in
-                    Text(shape.rawValue).tag(shape)
+        VStack(spacing: UIConstants.propertiesSpacing) {
+            // Shape properties
+            HStack(spacing: UIConstants.propertiesSpacing) {
+                Picker("Shape", selection: $shape.shape) {
+                    ForEach(ShapeKind.allCases, id: \.self) { shapeKind in
+                        Text(shapeKind.rawValue).tag(shapeKind)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                ColorPicker("Fill", selection: $shape.fillColor, supportsOpacity: true)
+                    .labelsHidden()
+                ColorPicker("Stroke", selection: $shape.strokeColor, supportsOpacity: true)
+                    .labelsHidden()
+                SliderWithLabel(label: "Stroke", value: $shape.strokeWidth, range: 0...20, step: 0.5)
+
+                if shape.shape.supportsCornerRadius {
+                    SliderWithLabel(label: "Radius", value: $shape.cornerRadius, range: ValidationConstants.shapeCornerRadiusRange, step: 2)
                 }
             }
-            .pickerStyle(.segmented)
-            ColorPicker("Fill", selection: $shape.fillColor, supportsOpacity: true)
-                .labelsHidden()
-            ColorPicker("Stroke", selection: $shape.strokeColor, supportsOpacity: true)
-                .labelsHidden()
-            SliderWithLabel(label: "Stroke", value: $shape.strokeWidth, range: 0...20, step: 0.5)
+
+            // Text properties (double-click shape to edit text)
+            HStack(spacing: UIConstants.propertiesSpacing) {
+                Text("Double-click shape to edit text")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+
+                Menu {
+                    ForEach(FontChoice.allCases, id: \.self) { font in
+                        Button(font.displayName) {
+                            shape.font = font
+                        }
+                    }
+                } label: {
+                    Label(shape.font.displayName, systemImage: "textformat")
+                }
+
+                SliderWithLabel(label: "Size", value: $shape.fontSize, range: 8...72, step: 1)
+
+                ColorPicker("Text", selection: $shape.textColor, supportsOpacity: true)
+                    .labelsHidden()
+
+                Picker("H-Align", selection: $shape.horizontalAlignment) {
+                    ForEach(TextAlignmentChoice.allCases, id: \.self) { align in
+                        Text(align.rawValue.prefix(1)).tag(align)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Picker("V-Align", selection: $shape.verticalAlignment) {
+                    ForEach(ShapeVerticalAlignment.allCases, id: \.self) { align in
+                        Text(align.rawValue.prefix(1)).tag(align)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
         }
     }
 }
@@ -949,6 +1129,7 @@ struct SettingsSheet: View {
 struct MainToolbar: View {
     @ObservedObject var canvas: AnnotationCanvas
     @Binding var selectedTool: ToolIdentifier
+    let onSelectTool: (ToolIdentifier) -> Void
     let onColor: () -> Void
     let onUndo: () -> Void
     let onRedo: () -> Void
@@ -990,7 +1171,7 @@ struct MainToolbar: View {
     private func toolbarGroup(title: String, category: ToolCategory) -> some View {
         HStack(spacing: UIConstants.toolSpacing) {
             ForEach(items.filter { $0.category == category }) { item in
-                ToolbarButton(item: item, selectedTool: $selectedTool)
+                ToolbarButton(item: item, selectedTool: $selectedTool, onSelectTool: onSelectTool)
             }
         }
     }
@@ -999,6 +1180,7 @@ struct MainToolbar: View {
 struct ToolbarButton: View {
     let item: MainToolbarItem
     @Binding var selectedTool: ToolIdentifier
+    let onSelectTool: (ToolIdentifier) -> Void
 
     var isSelected: Bool {
         guard let tool = item.tool else { return false }
@@ -1008,7 +1190,7 @@ struct ToolbarButton: View {
     var body: some View {
         Button {
             if let tool = item.tool {
-                selectedTool = tool
+                onSelectTool(tool)
             } else {
                 item.action?()
             }

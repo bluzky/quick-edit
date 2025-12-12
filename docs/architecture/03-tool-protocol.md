@@ -441,5 +441,5 @@ Canvas { context, size in
 ## See Also
 
 - Canvas API: `02-canvas-api.md`
-- Architecture: `04-canvas-architecture.md`
+- Architecture: `README.md`
 - Implementation Plan: `/docs/implementation-plan.md`

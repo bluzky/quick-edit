@@ -194,6 +194,13 @@ final class UpdatePropertiesCommand: CanvasCommand {
         props["visible"] = annotation.visible
         props["locked"] = annotation.locked
         props["zIndex"] = annotation.zIndex
+        if let shape = annotation as? ShapeAnnotation {
+            props["fill"] = shape.fill
+            props["stroke"] = shape.stroke
+            props["strokeWidth"] = shape.strokeWidth
+            props["shapeKind"] = shape.shapeKind
+            props["cornerRadius"] = shape.cornerRadius
+        }
         return props
     }
 
@@ -212,6 +219,23 @@ final class UpdatePropertiesCommand: CanvasCommand {
         }
         if let zIndex = properties["zIndex"] as? Int {
             annotation.zIndex = zIndex
+        }
+        if let shape = annotation as? ShapeAnnotation {
+            if let fill = properties["fill"] as? Color {
+                shape.fill = fill
+            }
+            if let stroke = properties["stroke"] as? Color {
+                shape.stroke = stroke
+            }
+            if let strokeWidth = properties["strokeWidth"] as? CGFloat {
+                shape.strokeWidth = strokeWidth
+            }
+            if let shapeKind = properties["shapeKind"] as? ShapeKind {
+                shape.shapeKind = shapeKind
+            }
+            if let cornerRadius = properties["cornerRadius"] as? CGFloat {
+                shape.cornerRadius = cornerRadius
+            }
         }
     }
 }
@@ -536,5 +560,122 @@ final class RotateCommand: CanvasCommand {
                 canvas.onAnnotationModified.send(canvas.annotations[i].id)
             }
         }
+    }
+}
+
+// MARK: - Move Command
+
+/// Command to move annotations by a delta offset
+final class MoveAnnotationsCommand: CanvasCommand {
+    let annotationIDs: Set<UUID>
+    let delta: CGPoint
+    private var originalPositions: [UUID: CGPoint] = [:]
+
+    var actionName: String {
+        annotationIDs.count == 1 ? "Move Annotation" : "Move \(annotationIDs.count) Annotations"
+    }
+
+    init(annotationIDs: Set<UUID>, delta: CGPoint) {
+        self.annotationIDs = annotationIDs
+        self.delta = delta
+    }
+
+    func execute(on canvas: AnnotationCanvas) {
+        // Save original positions before moving
+        for i in canvas.annotations.indices where annotationIDs.contains(canvas.annotations[i].id) {
+            originalPositions[canvas.annotations[i].id] = canvas.annotations[i].transform.position
+
+            // Apply delta to position
+            canvas.annotations[i].transform.position.x += delta.x
+            canvas.annotations[i].transform.position.y += delta.y
+
+            canvas.onAnnotationModified.send(canvas.annotations[i].id)
+        }
+    }
+
+    func undo(on canvas: AnnotationCanvas) {
+        // Restore original positions
+        for i in canvas.annotations.indices where annotationIDs.contains(canvas.annotations[i].id) {
+            if let originalPos = originalPositions[canvas.annotations[i].id] {
+                canvas.annotations[i].transform.position = originalPos
+                canvas.onAnnotationModified.send(canvas.annotations[i].id)
+            }
+        }
+    }
+}
+
+// MARK: - Move Control Point Command
+
+/// Command to move a single control point (endpoint or resize handle)
+final class MoveControlPointCommand: CanvasCommand {
+    let annotationID: UUID
+    let controlPointID: ControlPointRole
+    let newPosition: CGPoint   // Image-space position
+    private var snapshot: AnnotationSnapshot?
+
+    var actionName: String { "Adjust Handle" }
+
+    init(annotationID: UUID, controlPointID: ControlPointRole, newPosition: CGPoint) {
+        self.annotationID = annotationID
+        self.controlPointID = controlPointID
+        self.newPosition = newPosition
+    }
+
+    func execute(on canvas: AnnotationCanvas) {
+        guard let index = canvas.annotationIndex(for: annotationID) else { return }
+        if snapshot == nil {
+            snapshot = AnnotationSnapshot.capture(canvas.annotations[index])
+        }
+        canvas.annotations[index].moveControlPoint(controlPointID, to: newPosition)
+        canvas.onAnnotationModified.send(annotationID)
+    }
+
+    func undo(on canvas: AnnotationCanvas) {
+        guard let snapshot, let index = canvas.annotationIndex(for: annotationID) else { return }
+        snapshot.apply(to: &canvas.annotations[index])
+        canvas.onAnnotationModified.send(annotationID)
+    }
+}
+
+// MARK: - Update Shape Text Command
+
+/// Command to update the text content of a shape annotation
+final class UpdateShapeTextCommand: CanvasCommand {
+    let annotationID: UUID
+    let newText: String
+    private var oldText: String?
+
+    var actionName: String { "Edit Text" }
+
+    init(annotationID: UUID, newText: String) {
+        self.annotationID = annotationID
+        self.newText = newText
+    }
+
+    func execute(on canvas: AnnotationCanvas) {
+        guard let index = canvas.annotationIndex(for: annotationID),
+              let shapeAnnotation = canvas.annotations[index] as? ShapeAnnotation else {
+            return
+        }
+
+        // Save old text for undo
+        if oldText == nil {
+            oldText = shapeAnnotation.text
+        }
+
+        // Update the text
+        shapeAnnotation.text = newText
+        canvas.onAnnotationModified.send(annotationID)
+    }
+
+    func undo(on canvas: AnnotationCanvas) {
+        guard let oldText,
+              let index = canvas.annotationIndex(for: annotationID),
+              let shapeAnnotation = canvas.annotations[index] as? ShapeAnnotation else {
+            return
+        }
+
+        shapeAnnotation.text = oldText
+        canvas.onAnnotationModified.send(annotationID)
     }
 }

@@ -10,104 +10,6 @@ import SwiftUI
 import Combine
 import AppKit
 
-struct AnnotationTransform {
-    var position: CGPoint
-    var scale: CGSize
-    var rotation: Angle
-
-    static let identity = AnnotationTransform(
-        position: .zero,
-        scale: CGSize(width: 1, height: 1),
-        rotation: .zero
-    )
-}
-
-protocol Annotation: AnyObject, Identifiable {
-    var id: UUID { get }
-    var zIndex: Int { get set }
-    var visible: Bool { get set }
-    var locked: Bool { get set }
-    var transform: AnnotationTransform { get set }
-    var size: CGSize { get set }           // Stored in image space
-
-    func contains(point: CGPoint) -> Bool  // Point is in image space
-}
-
-final class RectangleAnnotation: Annotation {
-    let id: UUID = UUID()
-    var zIndex: Int
-    var visible: Bool = true
-    var locked: Bool = false
-    var transform: AnnotationTransform
-    var size: CGSize
-    var fill: Color
-    var stroke: Color
-
-    init(
-        zIndex: Int,
-        transform: AnnotationTransform,
-        size: CGSize,
-        fill: Color,
-        stroke: Color
-    ) {
-        self.zIndex = zIndex
-        self.transform = transform
-        self.size = size
-        self.fill = fill
-        self.stroke = stroke
-    }
-
-    func contains(point: CGPoint) -> Bool {
-        // Apply inverse transform to test point in local space
-        let scaledSize = CGSize(
-            width: size.width * abs(transform.scale.width),
-            height: size.height * abs(transform.scale.height)
-        )
-
-        // For now, ignore rotation in hit testing (TODO: implement rotated hit testing)
-        let rect = CGRect(origin: transform.position, size: scaledSize)
-        return rect.contains(point)
-    }
-
-    var bounds: CGRect {
-        // Calculate bounds accounting for scale (rotation would expand bounds further)
-        let scaledSize = CGSize(
-            width: size.width * abs(transform.scale.width),
-            height: size.height * abs(transform.scale.height)
-        )
-        return CGRect(origin: transform.position, size: scaledSize)
-    }
-}
-
-enum ResizeHandle: CaseIterable {
-    case topLeft, top, topRight
-    case left, right
-    case bottomLeft, bottom, bottomRight
-}
-
-struct ResizeHandleLayout {
-    static let handleSize: CGFloat = 8       // On-screen size at 100%
-    static let handleHitSize: CGFloat = 12   // On-screen hit target at 100%
-
-    // Keep handles a consistent on-screen size by scaling by inverse zoom
-    static func handleRects(for bounds: CGRect, zoomLevel: CGFloat) -> [ResizeHandle: CGRect] {
-        let w = bounds.width
-        let h = bounds.height
-        let hs = handleSize / zoomLevel
-
-        return [
-            .topLeft: CGRect(x: -hs / 2, y: -hs / 2, width: hs, height: hs),
-            .top: CGRect(x: w / 2 - hs / 2, y: -hs / 2, width: hs, height: hs),
-            .topRight: CGRect(x: w - hs / 2, y: -hs / 2, width: hs, height: hs),
-            .left: CGRect(x: -hs / 2, y: h / 2 - hs / 2, width: hs, height: hs),
-            .right: CGRect(x: w - hs / 2, y: h / 2 - hs / 2, width: hs, height: hs),
-            .bottomLeft: CGRect(x: -hs / 2, y: h - hs / 2, width: hs, height: hs),
-            .bottom: CGRect(x: w / 2 - hs / 2, y: h - hs / 2, width: hs, height: hs),
-            .bottomRight: CGRect(x: w - hs / 2, y: h - hs / 2, width: hs, height: hs)
-        ]
-    }
-}
-
 struct ZoomConfig {
     static let minZoom: CGFloat = 0.1   // 10%
     static let maxZoom: CGFloat = 5.0   // 500%
@@ -127,12 +29,13 @@ final class AnnotationCanvas: ObservableObject {
     // MARK: - Annotations
     @Published internal var annotations: [any Annotation] = []  // Internal for command pattern access
     @Published var selectedAnnotationIDs: Set<UUID> = []
+    @Published var editingAnnotationID: UUID? = nil  // Track which annotation is being text-edited
 
     // MARK: - View State
     @Published var zoomLevel: CGFloat = ZoomConfig.defaultZoom  // 0.1 to 5.0
     @Published var panOffset: CGPoint = .zero
-    @Published var showGrid: Bool = false
-    @Published var gridSize: CGFloat = 8
+    @Published var showGrid: Bool = true
+    @Published var gridSize: CGFloat = 16
     @Published var snapToGrid: Bool = false
     @Published var showAlignmentGuides: Bool = true
     @Published var showRulers: Bool = false
@@ -206,6 +109,7 @@ final class AnnotationCanvas: ObservableObject {
             self.activeTool?.deactivate()
             self.activeTool = tool
             tool?.activate()
+            self.clearSelection()
         }
     }
 
@@ -223,11 +127,21 @@ final class AnnotationCanvas: ObservableObject {
         selectedAnnotationIDs.removeAll()
     }
 
-    func toggleSelection(for id: UUID) {
-        if selectedAnnotationIDs.contains(id) {
-            selectedAnnotationIDs.remove(id)
+    func toggleSelection(for id: UUID, additive: Bool = false) {
+        if additive {
+            // Add to existing selection (Shift/Cmd click)
+            if selectedAnnotationIDs.contains(id) {
+                selectedAnnotationIDs.remove(id)
+            } else {
+                selectedAnnotationIDs.insert(id)
+            }
         } else {
-            selectedAnnotationIDs = [id]
+            // Replace selection (normal click)
+            if selectedAnnotationIDs.contains(id) {
+                selectedAnnotationIDs.remove(id)
+            } else {
+                selectedAnnotationIDs = [id]
+            }
         }
     }
 
@@ -235,16 +149,85 @@ final class AnnotationCanvas: ObservableObject {
         annotations.filter { selectedAnnotationIDs.contains($0.id) }
     }
 
+    func annotationIndex(for id: UUID) -> Int? {
+        annotations.firstIndex(where: { $0.id == id })
+    }
+
+    func annotation(withID id: UUID) -> (any Annotation)? {
+        annotations.first(where: { $0.id == id })
+    }
+
     func selectionBoundingBox(for ids: Set<UUID>) -> CGRect? {
         let selected = annotations.compactMap { annotation -> CGRect? in
             guard ids.contains(annotation.id) else { return nil }
-            return CGRect(origin: annotation.transform.position, size: annotation.size)
+
+            // Note: This still doesn't account for rotation (which requires rotating the corners)
+            // For now, we use the axis-aligned bounding box of the scaled shape
+            return annotation.bounds
         }
 
         guard let first = selected.first else { return nil }
         return selected.dropFirst().reduce(first) { partialResult, rect in
             partialResult.union(rect)
         }
+    }
+
+    // MARK: - Text Editing
+
+    func beginEditingText(for annotationID: UUID) {
+        editingAnnotationID = annotationID
+    }
+
+    func endEditingText() {
+        editingAnnotationID = nil
+    }
+
+    func updateAnnotationText(_ annotationID: UUID, text: String) {
+        guard let index = annotationIndex(for: annotationID),
+              let shapeAnnotation = annotations[index] as? ShapeAnnotation else {
+            return
+        }
+
+        // Only create command if text actually changed
+        guard shapeAnnotation.text != text else {
+            return
+        }
+
+        let command = UpdateShapeTextCommand(annotationID: annotationID, newText: text)
+        execute(command)
+    }
+
+    func controlPointHitTest(at canvasPoint: CGPoint) -> (UUID, ControlPointRole)? {
+        guard selectedAnnotationIDs.count == 1 else { return nil }
+        let hitSize = ResizeHandleLayout.handleHitSize / zoomLevel
+        let hitRadius = CGSize(width: hitSize, height: hitSize)
+
+        for id in selectedAnnotationIDs {
+            guard let annotation = annotation(withID: id) else { continue }
+            for control in annotation.controlPoints() {
+                let canvasPos = imageToCanvas(control.position)
+                let rect = CGRect(
+                    origin: CGPoint(x: canvasPos.x - hitRadius.width / 2, y: canvasPos.y - hitRadius.height / 2),
+                    size: hitRadius
+                )
+                if rect.contains(canvasPoint) {
+                    return (id, control.id)
+                }
+            }
+        }
+
+        return nil
+    }
+
+    func snapshot(for id: UUID) -> AnnotationSnapshot? {
+        guard let annotation = annotation(withID: id) else { return nil }
+        return AnnotationSnapshot.capture(annotation)
+    }
+
+    func applySnapshot(_ snapshot: AnnotationSnapshot, to id: UUID) {
+        guard let index = annotationIndex(for: id) else { return }
+        snapshot.apply(to: &annotations[index])
+        onAnnotationModified.send(id)
     }
 
     // MARK: - Annotation Lifecycle API
@@ -419,6 +402,18 @@ final class AnnotationCanvas: ObservableObject {
         rotate(.flipVertical, for: ids)
     }
 
+    // MARK: - Move API
+
+    /// Move annotations by a delta offset
+    /// - Parameters:
+    ///   - ids: Set of annotation IDs to move
+    ///   - delta: Movement offset in image space
+    func moveAnnotations(_ ids: Set<UUID>, by delta: CGPoint) {
+        guard !ids.isEmpty else { return }
+        let command = MoveAnnotationsCommand(annotationIDs: ids, delta: delta)
+        execute(command)
+    }
+
     // MARK: - History API
 
     /// Undo the last command
@@ -460,8 +455,11 @@ final class AnnotationCanvas: ObservableObject {
         )
     }
 
+    /// Apply grid snapping to selected annotations
+    /// This creates a MoveAnnotationsCommand for undo/redo support
     func applyGridSnapping(enabled: Bool, gridSize: CGFloat) {
         guard enabled else { return }
+        guard !selectedAnnotationIDs.isEmpty else { return }
 
         // Snap selection bounding box (works for single + multi-select)
         guard let selectionBounds = selectionBoundingBox(for: selectedAnnotationIDs) else { return }
@@ -471,15 +469,11 @@ final class AnnotationCanvas: ObservableObject {
             y: snappedOrigin.y - selectionBounds.origin.y
         )
 
-        // Move all selected annotations by the same delta to preserve relative layout
-        for id in selectedAnnotationIDs {
-            guard let index = annotations.firstIndex(where: { $0.id == id }) else { continue }
-            var transform = annotations[index].transform
-            transform.position.x += delta.x
-            transform.position.y += delta.y
-            annotations[index].transform = transform
-            onAnnotationModified.send(annotations[index].id)
-        }
+        // Only snap if there's a meaningful delta
+        guard abs(delta.x) > 0.1 || abs(delta.y) > 0.1 else { return }
+
+        // Use moveAnnotations to apply snap (goes through command pattern for undo/redo)
+        moveAnnotations(selectedAnnotationIDs, by: delta)
     }
 
     // MARK: - Zoom / Pan
@@ -541,28 +535,37 @@ final class AnnotationCanvas: ObservableObject {
     // MARK: - Demo Data
 
     private func seedDemoAnnotations() {
-        let first = RectangleAnnotation(
+        let first = ShapeAnnotation(
             zIndex: 1,
             transform: AnnotationTransform(position: CGPoint(x: 120, y: 90), scale: CGSize(width: 1, height: 1), rotation: .zero),
             size: CGSize(width: 240, height: 160),
             fill: Color.blue.opacity(0.18),
-            stroke: Color.blue.opacity(0.6)
+            stroke: Color.blue.opacity(0.6),
+            strokeWidth: 1.5,
+            shapeKind: .rectangle,
+            cornerRadius: 0
         )
 
-        let second = RectangleAnnotation(
+        let second = ShapeAnnotation(
             zIndex: 2,
             transform: AnnotationTransform(position: CGPoint(x: 260, y: 220), scale: CGSize(width: 1, height: 1), rotation: .zero),
             size: CGSize(width: 180, height: 120),
             fill: Color.green.opacity(0.18),
-            stroke: Color.green.opacity(0.6)
+            stroke: Color.green.opacity(0.6),
+            strokeWidth: 1.5,
+            shapeKind: .ellipse,
+            cornerRadius: 0
         )
 
-        let third = RectangleAnnotation(
+        let third = ShapeAnnotation(
             zIndex: 3,
             transform: AnnotationTransform(position: CGPoint(x: 420, y: 140), scale: CGSize(width: 1, height: 1), rotation: .zero),
             size: CGSize(width: 140, height: 120),
             fill: Color.orange.opacity(0.18),
-            stroke: Color.orange.opacity(0.6)
+            stroke: Color.orange.opacity(0.6),
+            strokeWidth: 1.5,
+            shapeKind: .diamond,
+            cornerRadius: 0
         )
 
         // Direct initialization - don't create undo commands for demo data
