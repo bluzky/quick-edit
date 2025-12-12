@@ -41,8 +41,9 @@ protocol AnnotationTool: AnyObject {
     /// Called when this tool is deactivated (switching to another tool)
     func deactivate()
 
-    /// Render preview overlay during interaction (e.g., shape being drawn)
-    func renderPreview(in context: inout GraphicsContext, canvas: AnnotationCanvas)
+    /// Return SwiftUI view for preview overlay during interaction (e.g., shape being drawn)
+    @ViewBuilder
+    func previewView(canvas: AnnotationCanvas) -> AnyView
 }
 
 // MARK: - Protocol Defaults
@@ -52,7 +53,9 @@ extension AnnotationTool {
     func activate() {}
     func deactivate() {}
     func onCancel(on canvas: AnnotationCanvas) {}
-    func renderPreview(in context: inout GraphicsContext, canvas: AnnotationCanvas) {}
+    func previewView(canvas: AnnotationCanvas) -> AnyView {
+        AnyView(EmptyView())
+    }
 }
 
 // MARK: - Select Tool
@@ -315,24 +318,38 @@ final class ShapeTool: AnnotationTool {
         resetState(on: canvas)
     }
 
-    func renderPreview(in context: inout GraphicsContext, canvas: AnnotationCanvas) {
-        guard let start = startPoint, let end = currentPoint else { return }
-
-        let canvasStart = canvas.imageToCanvas(start)
-        let canvasEnd = canvas.imageToCanvas(end)
+    func previewView(canvas: AnnotationCanvas) -> AnyView {
+        guard let start = startPoint, let end = currentPoint else {
+            return AnyView(EmptyView())
+        }
 
         let constrained = isShiftPressed()
-        let normalized = normalizedRect(start: canvasStart, end: canvasEnd, constrainSquare: constrained)
-        let rect = CGRect(origin: normalized.origin, size: normalized.size)
+        let normalized = normalizedRect(start: start, end: end, constrainSquare: constrained)
+        let minX = normalized.origin.x
+        let minY = normalized.origin.y
+        let width = normalized.size.width
+        let height = normalized.size.height
 
-        let path = makeShapePath(
-            kind: shapeKind,
-            size: rect.size,
+        // Create a temporary preview shape
+        let previewShape = ShapeAnnotation(
+            zIndex: 0,
+            transform: AnnotationTransform(
+                position: CGPoint(x: minX, y: minY),
+                scale: CGSize(width: 1, height: 1),
+                rotation: .zero
+            ),
+            size: CGSize(width: width, height: height),
+            fill: fillColor,
+            stroke: strokeColor,
+            strokeWidth: strokeWidth,
+            shapeKind: shapeKind,
             cornerRadius: shapeKind.supportsCornerRadius ? cornerRadius : 0
-        ).applying(CGAffineTransform(translationX: rect.origin.x, y: rect.origin.y))
+        )
 
-        context.fill(path, with: .color(fillColor))
-        context.stroke(path, with: .color(strokeColor), lineWidth: strokeWidth)
+        return AnyView(
+            ShapeAnnotationView(annotation: previewShape)
+                .opacity(0.7)  // Slightly transparent to indicate preview
+        )
     }
 
     func deactivate() {
@@ -476,42 +493,63 @@ final class LineTool: AnnotationTool {
         resetState(on: canvas)
     }
 
-    func renderPreview(in context: inout GraphicsContext, canvas: AnnotationCanvas) {
-        guard let start = startPoint, let current = currentPoint else { return }
+    func previewView(canvas: AnnotationCanvas) -> AnyView {
+        guard let start = startPoint, let current = currentPoint else {
+            return AnyView(EmptyView())
+        }
 
-        let startCanvas = canvas.imageToCanvas(start)
-        let endCanvas = canvas.imageToCanvas(current)
+        let dx = current.x - start.x
+        let dy = current.y - start.y
+        let distance = hypot(dx, dy)
 
-        var path = Path()
-        path.move(to: startCanvas)
-        path.addLine(to: endCanvas)
+        guard distance > 0.5 else {
+            return AnyView(EmptyView())
+        }
 
-        let strokeStyle = StrokeStyle(
-            lineWidth: strokeWidth,
-            lineCap: lineCap.strokeCap,
-            lineJoin: .round,
-            dash: lineStyle.dashPattern(for: strokeWidth)
+        let minX = min(start.x, current.x)
+        let minY = min(start.y, current.y)
+        let width = abs(dx)
+        let height = abs(dy)
+        let safeWidth = max(width, 0.1)
+        let safeHeight = max(height, 0.1)
+
+        var startLocal = CGPoint(x: start.x - minX, y: start.y - minY)
+        var endLocal = CGPoint(x: current.x - minX, y: current.y - minY)
+
+        if width == 0 {
+            startLocal.x = safeWidth / 2
+            endLocal.x = safeWidth / 2
+        }
+
+        if height == 0 {
+            startLocal.y = safeHeight / 2
+            endLocal.y = safeHeight / 2
+        }
+
+        // Create a temporary preview line
+        let previewLine = LineAnnotation(
+            zIndex: 0,
+            transform: AnnotationTransform(
+                position: CGPoint(x: minX, y: minY),
+                scale: CGSize(width: 1, height: 1),
+                rotation: .zero
+            ),
+            size: CGSize(width: safeWidth, height: safeHeight),
+            startPoint: startLocal,
+            endPoint: endLocal,
+            stroke: strokeColor,
+            strokeWidth: strokeWidth,
+            arrowStartType: arrowStartType,
+            arrowEndType: arrowEndType,
+            arrowSize: arrowSize,
+            lineStyle: lineStyle,
+            lineCap: lineCap
         )
 
-        context.stroke(path, with: .color(strokeColor), style: strokeStyle)
-
-        let angle = atan2(endCanvas.y - startCanvas.y, endCanvas.x - startCanvas.x)
-        if arrowEndType != .none {
-            drawPreviewArrow(
-                at: endCanvas,
-                angle: angle,
-                style: arrowEndType,
-                in: &context
-            )
-        }
-        if arrowStartType != .none {
-            drawPreviewArrow(
-                at: startCanvas,
-                angle: angle + .pi,
-                style: arrowStartType,
-                in: &context
-            )
-        }
+        return AnyView(
+            LineAnnotationView(annotation: previewLine)
+                .opacity(0.7)  // Slightly transparent to indicate preview
+        )
     }
 
     func deactivate() {
@@ -523,47 +561,6 @@ final class LineTool: AnnotationTool {
         startPoint = nil
         currentPoint = nil
         canvas.onInteractionEnded.send("drawing_line")
-    }
-
-    private func drawPreviewArrow(at point: CGPoint, angle: CGFloat, style: ArrowType, in context: inout GraphicsContext) {
-        guard arrowSize > 0 else { return }
-
-        var arrowContext = context
-        arrowContext.translateBy(x: point.x, y: point.y)
-        arrowContext.rotate(by: Angle(radians: Double(angle)))
-
-        let length = arrowSize
-        let halfWidth = arrowSize * 0.4
-
-        switch style {
-        case .none:
-            return  // Should not be called with .none
-        case .open:
-            var path = Path()
-            path.move(to: CGPoint(x: -length, y: -halfWidth))
-            path.addLine(to: .zero)
-            path.addLine(to: CGPoint(x: -length, y: halfWidth))
-            arrowContext.stroke(path, with: .color(strokeColor), style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round))
-        case .filled:
-            var path = Path()
-            path.move(to: .zero)
-            path.addLine(to: CGPoint(x: -length, y: -halfWidth))
-            path.addLine(to: CGPoint(x: -length, y: halfWidth))
-            path.closeSubpath()
-            arrowContext.fill(path, with: .color(strokeColor))
-        case .diamond:
-            var path = Path()
-            path.move(to: .zero)
-            path.addLine(to: CGPoint(x: -length / 2, y: -halfWidth))
-            path.addLine(to: CGPoint(x: -length, y: 0))
-            path.addLine(to: CGPoint(x: -length / 2, y: halfWidth))
-            path.closeSubpath()
-            arrowContext.fill(path, with: .color(strokeColor))
-        case .circle:
-            let diameter = arrowSize
-            let rect = CGRect(x: -diameter, y: -diameter / 2, width: diameter, height: diameter)
-            arrowContext.fill(Path(ellipseIn: rect), with: .color(strokeColor))
-        }
     }
 }
 
