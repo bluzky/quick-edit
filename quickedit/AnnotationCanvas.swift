@@ -127,11 +127,21 @@ final class AnnotationCanvas: ObservableObject {
         selectedAnnotationIDs.removeAll()
     }
 
-    func toggleSelection(for id: UUID) {
-        if selectedAnnotationIDs.contains(id) {
-            selectedAnnotationIDs.remove(id)
+    func toggleSelection(for id: UUID, additive: Bool = false) {
+        if additive {
+            // Add to existing selection (Shift/Cmd click)
+            if selectedAnnotationIDs.contains(id) {
+                selectedAnnotationIDs.remove(id)
+            } else {
+                selectedAnnotationIDs.insert(id)
+            }
         } else {
-            selectedAnnotationIDs = [id]
+            // Replace selection (normal click)
+            if selectedAnnotationIDs.contains(id) {
+                selectedAnnotationIDs.remove(id)
+            } else {
+                selectedAnnotationIDs = [id]
+            }
         }
     }
 

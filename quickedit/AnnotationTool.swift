@@ -81,6 +81,9 @@ final class SelectTool: AnnotationTool {
     func onMouseDown(at point: CGPoint, on canvas: AnnotationCanvas) {
         dragStartPoint = point
 
+        // Check if Shift or Cmd key is pressed for multi-select
+        let isAdditiveSelection = NSEvent.modifierFlags.contains(.shift) || NSEvent.modifierFlags.contains(.command)
+
         // First check if user grabbed a visible control point on selected annotations
         if let hit = canvas.controlPointHitTest(at: point) {
             activeControlPoint = hit
@@ -111,9 +114,13 @@ final class SelectTool: AnnotationTool {
             lastClickTime = now
             lastClickedAnnotationID = hit.id
 
-            // If clicking an unselected annotation, select it first
+            // If clicking an unselected annotation, select it
             if !canvas.selectedAnnotationIDs.contains(hit.id) {
-                canvas.toggleSelection(for: hit.id)
+                canvas.toggleSelection(for: hit.id, additive: isAdditiveSelection)
+            } else if isAdditiveSelection {
+                // Shift/Cmd clicking an already selected annotation deselects it
+                canvas.toggleSelection(for: hit.id, additive: true)
+                return
             }
 
             // Now prepare to drag (works for both previously selected and newly selected)
@@ -125,8 +132,11 @@ final class SelectTool: AnnotationTool {
                 originalPositions[annotation.id] = annotation.transform.position
             }
         } else {
-            // Clicking empty space - prepare to pan
-            canvas.clearSelection()
+            // Clicking empty space
+            if !isAdditiveSelection {
+                // Clear selection only if not holding modifier keys
+                canvas.clearSelection()
+            }
             isDraggingAnnotations = false
             initialPanOffset = canvas.panOffset
             lastClickTime = nil
