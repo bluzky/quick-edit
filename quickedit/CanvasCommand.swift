@@ -636,3 +636,46 @@ final class MoveControlPointCommand: CanvasCommand {
         canvas.onAnnotationModified.send(annotationID)
     }
 }
+
+// MARK: - Update Shape Text Command
+
+/// Command to update the text content of a shape annotation
+final class UpdateShapeTextCommand: CanvasCommand {
+    let annotationID: UUID
+    let newText: String
+    private var oldText: String?
+
+    var actionName: String { "Edit Text" }
+
+    init(annotationID: UUID, newText: String) {
+        self.annotationID = annotationID
+        self.newText = newText
+    }
+
+    func execute(on canvas: AnnotationCanvas) {
+        guard let index = canvas.annotationIndex(for: annotationID),
+              let shapeAnnotation = canvas.annotations[index] as? ShapeAnnotation else {
+            return
+        }
+
+        // Save old text for undo
+        if oldText == nil {
+            oldText = shapeAnnotation.text
+        }
+
+        // Update the text
+        shapeAnnotation.text = newText
+        canvas.onAnnotationModified.send(annotationID)
+    }
+
+    func undo(on canvas: AnnotationCanvas) {
+        guard let oldText,
+              let index = canvas.annotationIndex(for: annotationID),
+              let shapeAnnotation = canvas.annotations[index] as? ShapeAnnotation else {
+            return
+        }
+
+        shapeAnnotation.text = oldText
+        canvas.onAnnotationModified.send(annotationID)
+    }
+}

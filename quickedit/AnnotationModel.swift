@@ -110,6 +110,20 @@ extension Annotation {
     }
 }
 
+// MARK: - Text Alignment
+
+enum HorizontalTextAlignment: String, CaseIterable {
+    case left = "left"
+    case center = "center"
+    case right = "right"
+}
+
+enum VerticalTextAlignment: String, CaseIterable {
+    case top = "top"
+    case middle = "middle"
+    case bottom = "bottom"
+}
+
 // MARK: - Shape Annotation
 
 final class ShapeAnnotation: Annotation {
@@ -125,6 +139,14 @@ final class ShapeAnnotation: Annotation {
     var shapeKind: ShapeKind
     var cornerRadius: CGFloat
 
+    // Text properties
+    var text: String
+    var textColor: Color
+    var fontFamily: String
+    var fontSize: CGFloat
+    var horizontalAlignment: HorizontalTextAlignment
+    var verticalAlignment: VerticalTextAlignment
+
     init(
         zIndex: Int,
         transform: AnnotationTransform,
@@ -133,7 +155,13 @@ final class ShapeAnnotation: Annotation {
         stroke: Color,
         strokeWidth: CGFloat,
         shapeKind: ShapeKind,
-        cornerRadius: CGFloat
+        cornerRadius: CGFloat,
+        text: String = "",
+        textColor: Color = .black,
+        fontFamily: String = "System",
+        fontSize: CGFloat = 16,
+        horizontalAlignment: HorizontalTextAlignment = .center,
+        verticalAlignment: VerticalTextAlignment = .middle
     ) {
         self.zIndex = zIndex
         self.transform = transform
@@ -143,6 +171,12 @@ final class ShapeAnnotation: Annotation {
         self.strokeWidth = strokeWidth
         self.shapeKind = shapeKind
         self.cornerRadius = cornerRadius
+        self.text = text
+        self.textColor = textColor
+        self.fontFamily = fontFamily
+        self.fontSize = fontSize
+        self.horizontalAlignment = horizontalAlignment
+        self.verticalAlignment = verticalAlignment
     }
 
     func contains(point: CGPoint) -> Bool {
@@ -538,6 +572,12 @@ struct AnnotationSnapshot {
         var strokeWidth: CGFloat
         var shapeKind: ShapeKind
         var cornerRadius: CGFloat
+        var text: String
+        var textColor: Color
+        var fontFamily: String
+        var fontSize: CGFloat
+        var horizontalAlignment: HorizontalTextAlignment
+        var verticalAlignment: VerticalTextAlignment
     }
 
     struct LineState {
@@ -566,7 +606,13 @@ struct AnnotationSnapshot {
                 stroke: shape.stroke,
                 strokeWidth: shape.strokeWidth,
                 shapeKind: shape.shapeKind,
-                cornerRadius: shape.cornerRadius
+                cornerRadius: shape.cornerRadius,
+                text: shape.text,
+                textColor: shape.textColor,
+                fontFamily: shape.fontFamily,
+                fontSize: shape.fontSize,
+                horizontalAlignment: shape.horizontalAlignment,
+                verticalAlignment: shape.verticalAlignment
             )
         }
 
@@ -610,6 +656,12 @@ struct AnnotationSnapshot {
             shapeAnnotation.strokeWidth = shapeState.strokeWidth
             shapeAnnotation.shapeKind = shapeState.shapeKind
             shapeAnnotation.cornerRadius = shapeState.cornerRadius
+            shapeAnnotation.text = shapeState.text
+            shapeAnnotation.textColor = shapeState.textColor
+            shapeAnnotation.fontFamily = shapeState.fontFamily
+            shapeAnnotation.fontSize = shapeState.fontSize
+            shapeAnnotation.horizontalAlignment = shapeState.horizontalAlignment
+            shapeAnnotation.verticalAlignment = shapeState.verticalAlignment
         }
 
         if let lineState = line, let lineAnnotation = annotation as? LineAnnotation {

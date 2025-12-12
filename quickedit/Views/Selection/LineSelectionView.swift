@@ -16,14 +16,14 @@ struct LineSelectionView: View {
         let scaleX = abs(annotation.transform.scale.width == 0 ? 1 : annotation.transform.scale.width)
         let scaleY = abs(annotation.transform.scale.height == 0 ? 1 : annotation.transform.scale.height)
 
-        // Calculate absolute positions in image space
+        // Calculate absolute positions in canvas space (zoomed)
         let startAbsolute = CGPoint(
-            x: annotation.transform.position.x + annotation.startPoint.x * scaleX,
-            y: annotation.transform.position.y + annotation.startPoint.y * scaleY
+            x: (annotation.transform.position.x + annotation.startPoint.x * scaleX) * zoomLevel,
+            y: (annotation.transform.position.y + annotation.startPoint.y * scaleY) * zoomLevel
         )
         let endAbsolute = CGPoint(
-            x: annotation.transform.position.x + annotation.endPoint.x * scaleX,
-            y: annotation.transform.position.y + annotation.endPoint.y * scaleY
+            x: (annotation.transform.position.x + annotation.endPoint.x * scaleX) * zoomLevel,
+            y: (annotation.transform.position.y + annotation.endPoint.y * scaleY) * zoomLevel
         )
 
         ZStack(alignment: .topLeading) {
@@ -32,22 +32,22 @@ struct LineSelectionView: View {
                 path.move(to: startAbsolute)
                 path.addLine(to: endAbsolute)
             }
-            .stroke(Color.accentColor, lineWidth: 1 / zoomLevel)
+            .stroke(Color.accentColor, lineWidth: 1)
 
             // Start point handle
             CircleHandleView(
                 position: startAbsolute,
-                radius: 4 / zoomLevel,
+                radius: 4,
                 color: .accentColor,
-                strokeWidth: 2 / zoomLevel
+                strokeWidth: 2
             )
 
             // End point handle
             CircleHandleView(
                 position: endAbsolute,
-                radius: 4 / zoomLevel,
+                radius: 4,
                 color: .accentColor,
-                strokeWidth: 2 / zoomLevel
+                strokeWidth: 2
             )
         }
     }

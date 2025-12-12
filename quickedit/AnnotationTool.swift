@@ -73,6 +73,11 @@ final class SelectTool: AnnotationTool {
     private var activeControlPoint: (annotationID: UUID, controlID: ControlPointRole)?
     private var controlPointSnapshots: [UUID: AnnotationSnapshot] = [:]
 
+    // Double-click detection
+    private var lastClickTime: Date?
+    private var lastClickedAnnotationID: UUID?
+    private let doubleClickInterval: TimeInterval = 0.5  // 500ms
+
     func onMouseDown(at point: CGPoint, on canvas: AnnotationCanvas) {
         dragStartPoint = point
 
@@ -88,6 +93,24 @@ final class SelectTool: AnnotationTool {
 
         // Hit test to find annotation at point (point is in canvas space)
         if let hit = canvas.annotation(at: point) {
+            // Check for double-click on shapes
+            let now = Date()
+            if let lastClick = lastClickTime,
+               let lastID = lastClickedAnnotationID,
+               lastID == hit.id,
+               now.timeIntervalSince(lastClick) < doubleClickInterval,
+               hit is ShapeAnnotation {
+                // Double-click detected on a shape - enter text editing mode
+                canvas.beginEditingText(for: hit.id)
+                lastClickTime = nil
+                lastClickedAnnotationID = nil
+                return
+            }
+
+            // Update double-click tracking
+            lastClickTime = now
+            lastClickedAnnotationID = hit.id
+
             // If clicking an unselected annotation, select it first
             if !canvas.selectedAnnotationIDs.contains(hit.id) {
                 canvas.toggleSelection(for: hit.id)
@@ -106,6 +129,8 @@ final class SelectTool: AnnotationTool {
             canvas.clearSelection()
             isDraggingAnnotations = false
             initialPanOffset = canvas.panOffset
+            lastClickTime = nil
+            lastClickedAnnotationID = nil
         }
     }
 
@@ -256,18 +281,38 @@ final class ShapeTool: AnnotationTool {
     private var cornerRadius: CGFloat = 10
     private var shapeKind: ShapeKind = .rectangle
 
+    // Text properties
+    private var text: String = ""
+    private var textColor: Color = .black
+    private var fontFamily: String = "System"
+    private var fontSize: CGFloat = 16
+    private var horizontalAlignment: HorizontalTextAlignment = .center
+    private var verticalAlignment: VerticalTextAlignment = .middle
+
     func updateStyle(
         fill: Color,
         stroke: Color,
         strokeWidth: CGFloat,
         cornerRadius: CGFloat,
-        shapeKind: ShapeKind
+        shapeKind: ShapeKind,
+        text: String,
+        textColor: Color,
+        fontFamily: String,
+        fontSize: CGFloat,
+        horizontalAlignment: HorizontalTextAlignment,
+        verticalAlignment: VerticalTextAlignment
     ) {
         self.fillColor = fill
         self.strokeColor = stroke
         self.strokeWidth = strokeWidth
         self.cornerRadius = cornerRadius
         self.shapeKind = shapeKind
+        self.text = text
+        self.textColor = textColor
+        self.fontFamily = fontFamily
+        self.fontSize = fontSize
+        self.horizontalAlignment = horizontalAlignment
+        self.verticalAlignment = verticalAlignment
     }
 
     func onMouseDown(at point: CGPoint, on canvas: AnnotationCanvas) {
@@ -311,7 +356,13 @@ final class ShapeTool: AnnotationTool {
             stroke: strokeColor,
             strokeWidth: strokeWidth,
             shapeKind: shapeKind,
-            cornerRadius: shapeKind.supportsCornerRadius ? cornerRadius : 0
+            cornerRadius: shapeKind.supportsCornerRadius ? cornerRadius : 0,
+            text: text,
+            textColor: textColor,
+            fontFamily: fontFamily,
+            fontSize: fontSize,
+            horizontalAlignment: horizontalAlignment,
+            verticalAlignment: verticalAlignment
         )
 
         canvas.addAnnotation(shape)
@@ -343,7 +394,13 @@ final class ShapeTool: AnnotationTool {
             stroke: strokeColor,
             strokeWidth: strokeWidth,
             shapeKind: shapeKind,
-            cornerRadius: shapeKind.supportsCornerRadius ? cornerRadius : 0
+            cornerRadius: shapeKind.supportsCornerRadius ? cornerRadius : 0,
+            text: text,
+            textColor: textColor,
+            fontFamily: fontFamily,
+            fontSize: fontSize,
+            horizontalAlignment: horizontalAlignment,
+            verticalAlignment: verticalAlignment
         )
 
         return AnyView(

@@ -10,11 +10,12 @@ import SwiftUI
 /// Router view that renders any annotation type
 struct AnnotationView: View {
     let annotation: any Annotation
+    var zoomLevel: CGFloat = 1.0
 
     var body: some View {
         Group {
             if let shape = annotation as? ShapeAnnotation {
-                ShapeAnnotationView(annotation: shape)
+                ShapeAnnotationView(annotation: shape, zoomLevel: zoomLevel)
             } else if let line = annotation as? LineAnnotation {
                 LineAnnotationView(annotation: line)
             } else {

@@ -290,6 +290,18 @@ struct ShapeProperties {
             cornerRadius = cornerRadius.clamped(to: ValidationConstants.shapeCornerRadiusRange)
         }
     }
+
+    // Text properties
+    var text: String = ""
+    var textColor: Color = .black
+    var font: FontChoice = .system
+    var fontSize: Double = 16 {
+        didSet {
+            fontSize = fontSize.clamped(to: ValidationConstants.fontSizeRange)
+        }
+    }
+    var horizontalAlignment: TextAlignmentChoice = .center
+    var verticalAlignment: ShapeVerticalAlignment = .middle
 }
 
 struct TextProperties {
@@ -392,6 +404,10 @@ enum LineCap: String, CaseIterable {
 
 enum TextAlignmentChoice: String, CaseIterable {
     case left = "Left", center = "Center", right = "Right", justify = "Justify"
+}
+
+enum ShapeVerticalAlignment: String, CaseIterable {
+    case top = "Top", middle = "Middle", bottom = "Bottom"
 }
 
 enum NumberShapeStyle: String, CaseIterable {
@@ -549,12 +565,36 @@ final class EditorViewModel: ObservableObject {
 
     private func applyShapeProperties(_ shapeProps: ShapeProperties) {
         if let shapeTool = ToolRegistry.shared.tool(withID: "shape") as? ShapeTool {
+            // Convert UI enums to model enums
+            let horizontalAlignment: HorizontalTextAlignment = {
+                switch shapeProps.horizontalAlignment {
+                case .left: return .left
+                case .center: return .center
+                case .right: return .right
+                case .justify: return .center  // Fallback to center for justify
+                }
+            }()
+
+            let verticalAlignment: VerticalTextAlignment = {
+                switch shapeProps.verticalAlignment {
+                case .top: return .top
+                case .middle: return .middle
+                case .bottom: return .bottom
+                }
+            }()
+
             shapeTool.updateStyle(
                 fill: shapeProps.fillColor,
                 stroke: shapeProps.strokeColor,
                 strokeWidth: CGFloat(shapeProps.strokeWidth),
                 cornerRadius: CGFloat(shapeProps.cornerRadius),
-                shapeKind: shapeProps.shape
+                shapeKind: shapeProps.shape,
+                text: shapeProps.text,
+                textColor: shapeProps.textColor,
+                fontFamily: shapeProps.font.rawValue,
+                fontSize: CGFloat(shapeProps.fontSize),
+                horizontalAlignment: horizontalAlignment,
+                verticalAlignment: verticalAlignment
             )
         }
     }
@@ -743,22 +783,61 @@ struct ShapePropertiesView: View {
     @Binding var shape: ShapeProperties
 
     var body: some View {
-        HStack(spacing: UIConstants.propertiesSpacing) {
-            Picker("Shape", selection: $shape.shape) {
-                ForEach(ShapeKind.allCases, id: \.self) { shapeKind in
-                    Text(shapeKind.rawValue).tag(shapeKind)
+        VStack(spacing: UIConstants.propertiesSpacing) {
+            // Shape properties
+            HStack(spacing: UIConstants.propertiesSpacing) {
+                Picker("Shape", selection: $shape.shape) {
+                    ForEach(ShapeKind.allCases, id: \.self) { shapeKind in
+                        Text(shapeKind.rawValue).tag(shapeKind)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                ColorPicker("Fill", selection: $shape.fillColor, supportsOpacity: true)
+                    .labelsHidden()
+                ColorPicker("Stroke", selection: $shape.strokeColor, supportsOpacity: true)
+                    .labelsHidden()
+                SliderWithLabel(label: "Stroke", value: $shape.strokeWidth, range: 0...20, step: 0.5)
+
+                if shape.shape.supportsCornerRadius {
+                    SliderWithLabel(label: "Radius", value: $shape.cornerRadius, range: ValidationConstants.shapeCornerRadiusRange, step: 2)
                 }
             }
-            .pickerStyle(.segmented)
 
-            ColorPicker("Fill", selection: $shape.fillColor, supportsOpacity: true)
-                .labelsHidden()
-            ColorPicker("Stroke", selection: $shape.strokeColor, supportsOpacity: true)
-                .labelsHidden()
-            SliderWithLabel(label: "Stroke", value: $shape.strokeWidth, range: 0...20, step: 0.5)
+            // Text properties (double-click shape to edit text)
+            HStack(spacing: UIConstants.propertiesSpacing) {
+                Text("Double-click shape to edit text")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
 
-            if shape.shape.supportsCornerRadius {
-                SliderWithLabel(label: "Radius", value: $shape.cornerRadius, range: ValidationConstants.shapeCornerRadiusRange, step: 2)
+                Menu {
+                    ForEach(FontChoice.allCases, id: \.self) { font in
+                        Button(font.displayName) {
+                            shape.font = font
+                        }
+                    }
+                } label: {
+                    Label(shape.font.displayName, systemImage: "textformat")
+                }
+
+                SliderWithLabel(label: "Size", value: $shape.fontSize, range: 8...72, step: 1)
+
+                ColorPicker("Text", selection: $shape.textColor, supportsOpacity: true)
+                    .labelsHidden()
+
+                Picker("H-Align", selection: $shape.horizontalAlignment) {
+                    ForEach(TextAlignmentChoice.allCases, id: \.self) { align in
+                        Text(align.rawValue.prefix(1)).tag(align)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Picker("V-Align", selection: $shape.verticalAlignment) {
+                    ForEach(ShapeVerticalAlignment.allCases, id: \.self) { align in
+                        Text(align.rawValue.prefix(1)).tag(align)
+                    }
+                }
+                .pickerStyle(.segmented)
             }
         }
     }

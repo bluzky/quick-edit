@@ -10,23 +10,91 @@ import SwiftUI
 /// SwiftUI view that renders a ShapeAnnotation
 struct ShapeAnnotationView: View {
     let annotation: ShapeAnnotation
+    var zoomLevel: CGFloat = 1.0
 
     var body: some View {
-        let path = makeShapePath(
-            kind: annotation.shapeKind,
-            size: annotation.size,
-            cornerRadius: annotation.cornerRadius
+        let zoomedSize = CGSize(
+            width: annotation.size.width * zoomLevel,
+            height: annotation.size.height * zoomLevel
         )
 
-        path
-            .fill(annotation.fill)
-            .overlay(
-                path
-                    .stroke(annotation.stroke, lineWidth: annotation.strokeWidth)
+        let path = makeShapePath(
+            kind: annotation.shapeKind,
+            size: zoomedSize,
+            cornerRadius: annotation.cornerRadius * zoomLevel
+        )
+
+        ZStack {
+            path
+                .fill(annotation.fill)
+                .overlay(
+                    path
+                        .stroke(annotation.stroke, lineWidth: annotation.strokeWidth * zoomLevel)
+                )
+
+            if !annotation.text.isEmpty {
+                textView(zoomedSize: zoomedSize)
+            }
+        }
+        .frame(width: zoomedSize.width, height: zoomedSize.height)
+        .annotationTransform(annotation.transform, size: annotation.size, zoomLevel: zoomLevel)
+        .opacity(annotation.visible ? 1.0 : 0.0)
+    }
+
+    private func textView(zoomedSize: CGSize) -> some View {
+        Text(annotation.text)
+            .font(makeFont())
+            .foregroundColor(annotation.textColor)
+            .multilineTextAlignment(horizontalTextAlignment)
+            .lineLimit(nil)
+            .frame(
+                width: max(zoomedSize.width - 16, 0),
+                height: max(zoomedSize.height - 16, 0),
+                alignment: textFrameAlignment
             )
-            .frame(width: annotation.size.width, height: annotation.size.height)
-            .annotationTransform(annotation.transform, size: annotation.size)
-            .opacity(annotation.visible ? 1.0 : 0.0)
+            .padding(8)
+    }
+
+    private func makeFont() -> Font {
+        let size = annotation.fontSize * zoomLevel
+        switch annotation.fontFamily {
+        case "System":
+            return .system(size: size)
+        case "SF Mono":
+            return .system(size: size, design: .monospaced)
+        case "SF Pro Rounded":
+            return .system(size: size, design: .rounded)
+        default:
+            return Font.custom(annotation.fontFamily, size: size)
+        }
+    }
+
+    private var horizontalTextAlignment: TextAlignment {
+        switch annotation.horizontalAlignment {
+        case .left: return .leading
+        case .center: return .center
+        case .right: return .trailing
+        }
+    }
+
+    private var textFrameAlignment: Alignment {
+        let horizontal: SwiftUI.HorizontalAlignment = {
+            switch annotation.horizontalAlignment {
+            case .left: return .leading
+            case .center: return .center
+            case .right: return .trailing
+            }
+        }()
+
+        let vertical: SwiftUI.VerticalAlignment = {
+            switch annotation.verticalAlignment {
+            case .top: return .top
+            case .middle: return .center
+            case .bottom: return .bottom
+            }
+        }()
+
+        return Alignment(horizontal: horizontal, vertical: vertical)
     }
 }
 

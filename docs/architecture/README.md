@@ -1,6 +1,6 @@
-# Canvas Architecture Documentation
+# Architecture Documentation
 
-**Last Updated:** December 9, 2025
+**Last Updated:** December 12, 2025
 **Status:** ✅ Complete and Production-Ready
 
 ## Quick Start
@@ -10,17 +10,17 @@ Choose your documentation:
 1. **[Annotation JSON Structure](01-annotation-json.md)** - Data format for annotations
 2. **[Canvas API Reference](02-canvas-api.md)** - Complete API documentation
 3. **[Tool Protocol Guide](03-tool-protocol.md)** - How to create and integrate tools
-4. **[Canvas Architecture](04-canvas-architecture.md)** - System design and patterns
 
 ---
 
 ## What Is This?
 
-QuickEdit uses a **canvas system** for annotation-based image editing. The canvas:
+QuickEdit uses a **pure SwiftUI canvas system** for annotation-based image editing. The canvas:
 - Stores annotations as structured data (separate from images)
 - Provides APIs for creating, editing, and transforming annotations
 - Supports full undo/redo with command pattern
 - Uses protocol-based tools for different annotation types
+- Renders everything with pure SwiftUI (no Canvas/GraphicsContext)
 
 ---
 
@@ -29,6 +29,7 @@ QuickEdit uses a **canvas system** for annotation-based image editing. The canva
 ✅ **Command Pattern** - All operations undoable
 ✅ **Protocol-Based Tools** - Easy to add new annotation types
 ✅ **Unidirectional Data Flow** - Predictable state management
+✅ **Pure SwiftUI Rendering** - Sharp, crisp rendering at all zoom levels
 ✅ **Transform System** - Rotate, scale, flip annotations
 ✅ **Event Publishers** - React to state changes
 ✅ **Coordinate Conversion** - Canvas ↔ Image space
@@ -46,25 +47,35 @@ Command Pattern (Undo/Redo)
         ↓
 Canvas State (@Published)
         ↓
-SwiftUI Re-renders
+SwiftUI Views (Pure SwiftUI)
+        ↓
+Sharp Rendering (No Canvas blur)
 ```
 
-**Files:**
-- `AnnotationCanvas.swift` - Model and APIs
-- `AnnotationCanvasView.swift` - SwiftUI rendering
-- `CanvasCommand.swift` - Command pattern (8 command types)
-- `AnnotationTool.swift` - Tool protocol and implementations
+**Core Files:**
+- `AnnotationCanvas.swift` - Model and APIs (584 lines)
+- `AnnotationCanvasView.swift` - SwiftUI wrapper (17 lines)
+- `SwiftUIAnnotationCanvasView.swift` - Main canvas view (176 lines)
+- `CanvasCommand.swift` - Command pattern (8 command types, 581 lines)
+- `AnnotationTool.swift` - Tool protocol and implementations (565 lines)
+
+**View Layer:**
+- `Views/Annotations/` - ShapeAnnotationView, LineAnnotationView, AnnotationView
+- `Views/Selection/` - Selection handles and bounding boxes
+- `Views/Canvas/` - GridView, ToolPreviewView, ScrollWheelPanContainer
 
 ---
 
 ## Current Implementation
 
 ### Annotation Types
-- ✅ **Rectangle** - Draw filled/stroked rectangles
+- ✅ **Shape** - Rectangle, ellipse, rounded rect, diamond, triangle
+- ✅ **Line** - Straight lines with arrow heads (4 styles)
 
 ### Tools
 - ✅ **SelectTool** - Select, deselect, pan canvas, drag to move
-- ✅ **RectangleTool** - Draw rectangles with live preview
+- ✅ **ShapeTool** - Draw shapes with live SwiftUI preview
+- ✅ **LineTool** - Draw lines/arrows with live SwiftUI preview
 
 ### Commands (9 types)
 - ✅ AddAnnotationCommand
@@ -86,6 +97,33 @@ SwiftUI Re-renders
 
 ---
 
+## SwiftUI Architecture
+
+### Rendering Strategy
+
+**Pure SwiftUI Views** - No Canvas/GraphicsContext rasterization:
+- Annotations render with `Shape` protocol (Path, stroke, fill)
+- Selection handles use geometric SwiftUI views
+- Tool previews use the same views as finished annotations
+- All rendering scales perfectly at any zoom level
+
+**Transform Layering:**
+```
+Container (.scaleEffect + .offset)
+    ↓
+Annotation Views (image space coordinates)
+    ↓
+Sharp rendering (no blur)
+```
+
+### Key Benefits
+- **Sharp rendering** - Vector-based SwiftUI Shapes scale perfectly
+- **Consistent preview** - Tool preview = final result (same views)
+- **Fixed UI elements** - Selection handles stay constant size (1pt / zoomLevel)
+- **Simple code** - Single rendering path, no Canvas duplication
+
+---
+
 ## Documentation Map
 
 | Document | Purpose | Audience |
@@ -93,7 +131,6 @@ SwiftUI Re-renders
 | [01-annotation-json.md](01-annotation-json.md) | JSON structure, color format | Backend, Import/Export |
 | [02-canvas-api.md](02-canvas-api.md) | API reference, usage examples | UI developers |
 | [03-tool-protocol.md](03-tool-protocol.md) | Creating tools, integration | Tool developers |
-| [04-canvas-architecture.md](04-canvas-architecture.md) | Design patterns, data flow | Architects, reviewers |
 
 ---
 
@@ -103,15 +140,17 @@ SwiftUI Re-renders
 
 1. Read: [01-annotation-json.md](01-annotation-json.md) - JSON structure
 2. Implement `Annotation` protocol
-3. Add rendering logic in `AnnotationCanvasView`
-4. Create tool (see [03-tool-protocol.md](03-tool-protocol.md))
+3. Create SwiftUI view (e.g., `TextAnnotationView: View`)
+4. Add to `AnnotationView` router
+5. Create tool (see [03-tool-protocol.md](03-tool-protocol.md))
 
 ### Create a New Tool
 
 1. Read: [03-tool-protocol.md](03-tool-protocol.md) - Complete guide
 2. Implement `AnnotationTool` protocol
-3. Register in `ToolRegistry`
-4. Map to UI in `ContentView.swift`
+3. Implement `previewView()` to return SwiftUI preview
+4. Register in `ToolRegistry`
+5. Map to UI in `ContentView.swift`
 
 ### Use Canvas APIs
 
@@ -120,31 +159,27 @@ SwiftUI Re-renders
 3. Never mutate state directly
 4. All operations are automatically undoable
 
-### Understand Architecture
-
-1. Read: [04-canvas-architecture.md](04-canvas-architecture.md) - Full architecture
-2. Review data flow diagrams
-3. Study command pattern implementation
-4. Explore coordinate space conversion
-
 ---
 
 ## Code Examples
 
-### Draw Rectangle
+### Draw Shape
 ```swift
-let rect = RectangleAnnotation(
+let shape = ShapeAnnotation(
     zIndex: canvas.annotations.count,
     transform: AnnotationTransform(
         position: CGPoint(x: 100, y: 100),
         scale: CGSize(width: 1, height: 1),
         rotation: .zero
     ),
-    size: CGSize(width: 200, height: 100),
+    size: CGSize(width: 200, height: 150),
     fill: .blue.opacity(0.3),
-    stroke: .blue
+    stroke: .blue,
+    strokeWidth: 2,
+    shapeKind: .rounded,
+    cornerRadius: 15
 )
-canvas.addAnnotation(rect)  // Undoable!
+canvas.addAnnotation(shape)  // Undoable!
 ```
 
 ### Rotate Selected
@@ -154,20 +189,28 @@ canvas.undo()         // Undo rotation
 canvas.flipHorizontal() // Mirror horizontally
 ```
 
-### Create Tool
+### Create Tool with SwiftUI Preview
 ```swift
-final class LineTool: AnnotationTool {
-    let id = "line"
-    let name = "Line"
-    let iconName = "line.diagonal"
+final class MyTool: AnnotationTool {
+    let id = "my-tool"
+    let name = "My Tool"
+    let iconName = "star.fill"
 
     func onMouseDown(at point: CGPoint, on canvas: AnnotationCanvas) {
-        // Start line
+        // Start drawing
     }
 
     func onMouseUp(at point: CGPoint, on canvas: AnnotationCanvas) {
-        // Create line annotation
-        canvas.addAnnotation(line)
+        // Create annotation
+        canvas.addAnnotation(annotation)
+    }
+
+    func previewView(canvas: AnnotationCanvas) -> AnyView {
+        // Return SwiftUI view for live preview
+        return AnyView(
+            MyAnnotationView(annotation: previewAnnotation)
+                .opacity(0.7)
+        )
     }
 }
 ```
@@ -178,24 +221,31 @@ final class LineTool: AnnotationTool {
 
 ✅ **0 errors, 0 warnings**
 
-**Files:**
+**Core Files:**
 - CanvasCommand.swift: 581 lines (9 command types)
-- AnnotationTool.swift: 292 lines (SelectTool with live preview)
+- AnnotationTool.swift: 565 lines (3 tools with SwiftUI previews)
 - AnnotationCanvas.swift: 584 lines (30+ APIs)
-- AnnotationCanvasView.swift: 218 lines
+- SwiftUIAnnotationCanvasView.swift: 176 lines
+- AnnotationCanvasView.swift: 17 lines (simple wrapper)
 
-**Total:** ~1,675 lines of canvas code
+**View Layer:**
+- ShapeAnnotationView.swift: 70 lines
+- LineAnnotationView.swift: 260 lines (pure SwiftUI Shapes)
+- Selection views: 6 files, ~300 lines total
+
+**Total:** ~2,500 lines of canvas + view code
 
 ---
 
 ## Testing
 
 **Manual Testing:**
-- ✅ Rectangle drawing with live preview
-- ✅ Selection with handles
+- ✅ Shape drawing with live SwiftUI preview
+- ✅ Line/arrow drawing with live SwiftUI preview
+- ✅ Selection with handles (fixed size at all zoom levels)
 - ✅ Drag to move annotations (live preview)
 - ✅ Undo/redo for all operations
-- ✅ Canvas panning and zooming
+- ✅ Canvas panning and zooming (sharp at all levels)
 - ✅ Grid snapping
 - ✅ Transform rendering (rotate/flip/scale)
 
@@ -204,22 +254,25 @@ final class LineTool: AnnotationTool {
 - Coordinate conversion
 - Hit testing
 - Tool integration
+- SwiftUI rendering
 
 ---
 
 ## Future Roadmap
 
-**Next Tools:**
-- Line Tool (arrows, connectors)
-- Text Tool (rich text annotations)
-- Freehand Tool (pen drawing)
-- Highlight Tool (translucent markers)
+**Next Annotation Types:**
+- Text annotations (rich text)
+- Freehand drawing (pen tool)
+- Highlight (translucent markers)
+- Blur (privacy masking)
+- Image annotations (stickers)
 
 **Next Features:**
 - JSON serialization (save/load)
-- Multi-selection (shift+click, box select)
+- Multi-selection box (drag rectangle to select)
 - Grouping (nested transforms)
 - Layers panel
+- Text editing
 
 **All infrastructure ready!** Just implement protocols and integrate.
 
@@ -238,5 +291,4 @@ final class LineTool: AnnotationTool {
 
 **For tool development:** See [03-tool-protocol.md](03-tool-protocol.md)
 **For API usage:** See [02-canvas-api.md](02-canvas-api.md)
-**For architecture:** See [04-canvas-architecture.md](04-canvas-architecture.md)
 **For data format:** See [01-annotation-json.md](01-annotation-json.md)

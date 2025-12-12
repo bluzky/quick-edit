@@ -29,6 +29,7 @@ final class AnnotationCanvas: ObservableObject {
     // MARK: - Annotations
     @Published internal var annotations: [any Annotation] = []  // Internal for command pattern access
     @Published var selectedAnnotationIDs: Set<UUID> = []
+    @Published var editingAnnotationID: UUID? = nil  // Track which annotation is being text-edited
 
     // MARK: - View State
     @Published var zoomLevel: CGFloat = ZoomConfig.defaultZoom  // 0.1 to 5.0
@@ -159,6 +160,31 @@ final class AnnotationCanvas: ObservableObject {
         return selected.dropFirst().reduce(first) { partialResult, rect in
             partialResult.union(rect)
         }
+    }
+
+    // MARK: - Text Editing
+
+    func beginEditingText(for annotationID: UUID) {
+        editingAnnotationID = annotationID
+    }
+
+    func endEditingText() {
+        editingAnnotationID = nil
+    }
+
+    func updateAnnotationText(_ annotationID: UUID, text: String) {
+        guard let index = annotationIndex(for: annotationID),
+              let shapeAnnotation = annotations[index] as? ShapeAnnotation else {
+            return
+        }
+
+        // Only create command if text actually changed
+        guard shapeAnnotation.text != text else {
+            return
+        }
+
+        let command = UpdateShapeTextCommand(annotationID: annotationID, newText: text)
+        execute(command)
     }
 
     func controlPointHitTest(at canvasPoint: CGPoint) -> (UUID, ControlPointRole)? {

@@ -14,31 +14,37 @@ struct ShapeSelectionView: View {
 
     var body: some View {
         let bounds = annotation.bounds
-        let handleSize = ResizeHandleLayout.handleSize / zoomLevel
+        let zoomedBounds = CGRect(
+            x: bounds.origin.x * zoomLevel,
+            y: bounds.origin.y * zoomLevel,
+            width: bounds.width * zoomLevel,
+            height: bounds.height * zoomLevel
+        )
+        let handleSize = ResizeHandleLayout.handleSize
 
         ZStack(alignment: .topLeading) {
             // Selection outline
             Rectangle()
-                .stroke(Color.accentColor, lineWidth: 1 / zoomLevel)
-                .frame(width: bounds.width, height: bounds.height)
+                .stroke(Color.accentColor, lineWidth: 1)
+                .frame(width: zoomedBounds.width, height: zoomedBounds.height)
                 .position(
-                    x: bounds.origin.x + bounds.width / 2,
-                    y: bounds.origin.y + bounds.height / 2
+                    x: zoomedBounds.origin.x + zoomedBounds.width / 2,
+                    y: zoomedBounds.origin.y + zoomedBounds.height / 2
                 )
 
             // 8 resize handles
-            let handleRects = ResizeHandleLayout.handleRects(for: CGRect(origin: .zero, size: bounds.size), zoomLevel: zoomLevel)
+            let handleRects = ResizeHandleLayout.handleRects(for: CGRect(origin: .zero, size: zoomedBounds.size), zoomLevel: 1.0)
 
             ForEach(Array(handleRects.keys), id: \.self) { handle in
                 if let rect = handleRects[handle] {
                     ResizeHandleView(
                         position: CGPoint(
-                            x: bounds.origin.x + rect.midX,
-                            y: bounds.origin.y + rect.midY
+                            x: zoomedBounds.origin.x + rect.midX,
+                            y: zoomedBounds.origin.y + rect.midY
                         ),
                         size: handleSize,
                         color: .accentColor,
-                        strokeWidth: 1 / zoomLevel
+                        strokeWidth: 1
                     )
                 }
             }

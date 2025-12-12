@@ -13,12 +13,19 @@ struct MultiSelectionView: View {
     let zoomLevel: CGFloat
 
     var body: some View {
+        let zoomedBounds = CGRect(
+            x: boundingBox.origin.x * zoomLevel,
+            y: boundingBox.origin.y * zoomLevel,
+            width: boundingBox.width * zoomLevel,
+            height: boundingBox.height * zoomLevel
+        )
+
         Rectangle()
-            .stroke(Color.accentColor, lineWidth: 1 / zoomLevel)
-            .frame(width: boundingBox.width, height: boundingBox.height)
+            .stroke(Color.accentColor, lineWidth: 1)
+            .frame(width: zoomedBounds.width, height: zoomedBounds.height)
             .position(
-                x: boundingBox.origin.x + boundingBox.width / 2,
-                y: boundingBox.origin.y + boundingBox.height / 2
+                x: zoomedBounds.origin.x + zoomedBounds.width / 2,
+                y: zoomedBounds.origin.y + zoomedBounds.height / 2
             )
     }
 }

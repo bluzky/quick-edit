@@ -567,4 +567,4 @@ canvas.addAnnotation(rect)
 
 - Annotation JSON: `01-annotation-json.md`
 - Tool Protocol: `03-tool-protocol.md`
-- Architecture: `04-canvas-architecture.md`
+- Architecture: `README.md`
